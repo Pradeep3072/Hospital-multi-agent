@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: hospital_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: hospital_user
+      POSTGRES_PASSWORD: hospital_password
+      POSTGRES_DB: hospital_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hospital_user -d hospital_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: hospital_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: hospital_fastapi
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql://hospital_user:hospital_password@postgres:5432/hospital_db
+      - REDIS_URL=redis://redis:6379/0
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: hospital_streamlit
+    restart: always
+    environment:
+      - BACKEND_API_URL=http://fastapi:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - fastapi
+
+volumes:
+  postgres_data:
+  redis_data:
