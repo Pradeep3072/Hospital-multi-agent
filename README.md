@@ -73,13 +73,19 @@ The system employs a hierarchical supervisor multi-agent architecture:
 - [x] **Phase 6 — Google ADK Multi-Agent Orchestration**:
   - Root Supervisor agent routing user queries to specialized sub-agents based on intent classification.
   - Dual-mode reasoning: Google Gemini LLM synthesis when `GEMINI_API_KEY` is present, with an offline deterministic fallback for immediate testability.
+- [x] **Phase 7 — Short-Term State & Memory**:
+  - Hybrid memory management via `SessionMemoryManager`: active Redis cache for production (`session:{session_id}:messages`) with seamless in-memory LRU fallback for zero-dependency local development.
+  - Conversational sliding context window formatting recent turns (`format_chat_history`) injected into LLM/sub-agent prompts for multi-turn dialogue resolution.
+  - Distributed and local concurrency lock management (`acquire_lock` / `release_lock`).
+  - Chat history endpoints (`GET /api/v1/chat/history/{session_id}`, `DELETE /api/v1/chat/history/{session_id}`, `GET /api/v1/chat/status`).
+  - Frontend UI integration with live memory engine badge and "Clear Chat" control.
 - [x] **Phase 9 — Safety & Emergency Triage**:
   - Zero-latency heuristic & semantic emergency detector for acute clinical symptoms (chest pain, stroke signs, severe hemorrhage, choking).
   - Immediate Level 1 Trauma escalation bypassing appointment flows with 911/ER guidance and direct emergency line (`(555) 0911`).
   - Security audit logging recording patient data reads, bookings, and cancellations.
 - [x] **Phase 10 — Frontend & Test Automation**:
   - Streamlit UI with modern healthcare styling, active patient switcher, interactive AI chat with agent badges, appointments calendar, doctor directory, and patient medical profile viewer.
-  - 14 automated unit and integration tests covering concurrency locks, RAG search, emergency escalation, and API routes.
+  - 22 automated unit and integration tests covering concurrency locks, RAG search, emergency escalation, session memory, and API routes.
 
 ---
 
@@ -88,9 +94,6 @@ The system employs a hierarchical supervisor multi-agent architecture:
 - [ ] **Phase 3 — Patient Authentication & RBAC**:
   - *Current Status*: Active patient context switcher is fully implemented in the UI and API (allowing seamless switching between simulated profiles like John Doe, Sarah Connor, Alice Johnson without requiring login or signup, per project design).
   - *Remaining for Production*: Enforcing strict JWT access/refresh token verification, password hashing (bcrypt), and role-based login guards when authentication is formally re-enabled.
-- [ ] **Phase 7 — Short-Term State & Memory**:
-  - *Current Status*: Multi-turn conversation history and agent responses are persisted in relational tables (`conversations`, `memory_records`).
-  - *Remaining for Production*: Redis session caching, transient distributed lock coordination (`Redlock`), and automated periodic LLM conversation summarization workers.
 - [ ] **Phase 8 — Notifications & Asynchronous Workers**:
   - *Current Status*: Notification service dispatches appointment confirmation and cancellation notices, logs them into the `notifications` database table, and streams to worker logs.
   - *Remaining for Production*: Live SMTP/SendGrid email delivery and Twilio SMS gateway integration via Celery/Redis background queues.

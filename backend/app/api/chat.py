@@ -1,8 +1,43 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from backend.app.schemas.chat import ChatRequest, ChatResponse
 from backend.app.agents.root_agent import root_supervisor
+from backend.app.memory.session_manager import memory_manager
 
 router = APIRouter(prefix="/chat", tags=["Multi-Agent Chat"])
+
+
+@router.get("/status")
+def get_memory_status():
+    """
+    Returns the operational status of the conversational session memory store (Redis vs In-Memory).
+    """
+    return memory_manager.get_status()
+
+
+@router.get("/history/{session_id}")
+def get_session_history(session_id: str, limit: int = Query(10, ge=1, le=50)):
+    """
+    Retrieves recent conversation turns for a session from the short-term cache / database.
+    """
+    history = memory_manager.get_history(session_id=session_id, limit=limit)
+    return {
+        "session_id": session_id,
+        "count": len(history),
+        "history": history
+    }
+
+
+@router.delete("/history/{session_id}")
+def clear_session_history(session_id: str):
+    """
+    Flushes the active short-term session memory for a given session.
+    """
+    cleared = memory_manager.clear_session(session_id)
+    return {
+        "session_id": session_id,
+        "cleared": cleared,
+        "message": f"Session memory for '{session_id}' cleared successfully."
+    }
 
 
 @router.post("", response_model=ChatResponse)
@@ -24,3 +59,4 @@ def handle_chat_message(req: ChatRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent workflow error: {str(e)}")
+

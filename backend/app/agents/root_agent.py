@@ -9,6 +9,8 @@ from backend.app.agents.appointment_agent import AppointmentAgent
 from backend.app.agents.medical_agent import MedicalKnowledgeAgent
 from backend.app.database.session import SessionLocal
 from backend.app.database.models import Conversation, MemoryRecord
+from backend.app.memory.session_manager import memory_manager
+from backend.app.memory.context_window import format_chat_history
 
 
 class RootSupervisorAgent:
@@ -74,6 +76,11 @@ class RootSupervisorAgent:
         patient_id = context.get("patient_id", 1)
         session_id = context.get("session_id", "default-session")
 
+        # Load recent sliding context window from short-term memory
+        recent_turns = memory_manager.get_history(session_id, limit=6)
+        context["history"] = recent_turns
+        context["history_text"] = format_chat_history(recent_turns, max_turns=6)
+
         # 1. Emergency Pre-Check
         emerg_result = self.emergency_agent.process(message, context)
         if emerg_result.get("is_emergency"):
@@ -118,39 +125,22 @@ class RootSupervisorAgent:
 
     def _save_memory(self, session_id: str, patient_id: int, user_msg: str, agent_response: str, agent_name: str):
         """
-        Persist conversation turns into PostgreSQL / relational memory_records.
+        Record conversation turns into Redis / in-memory cache and relational database.
         """
-        db = SessionLocal()
-        try:
-            # Find or create conversation
-            conv = db.query(Conversation).filter(Conversation.session_id == session_id).first()
-            if not conv:
-                conv = Conversation(session_id=session_id, patient_id=patient_id)
-                db.add(conv)
-                db.commit()
-                db.refresh(conv)
-
-            # Add user turn
-            rec_user = MemoryRecord(
-                conversation_id=conv.id,
-                role="user",
-                agent_name=None,
-                content=user_msg
-            )
-            # Add agent turn
-            rec_agent = MemoryRecord(
-                conversation_id=conv.id,
-                role="agent",
-                agent_name=agent_name,
-                content=agent_response
-            )
-            db.add_all([rec_user, rec_agent])
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            print(f"Failed to record memory: {e}")
-        finally:
-            db.close()
+        memory_manager.add_turn(
+            session_id=session_id,
+            role="user",
+            content=user_msg,
+            agent_name=None,
+            patient_id=patient_id
+        )
+        memory_manager.add_turn(
+            session_id=session_id,
+            role="agent",
+            content=agent_response,
+            agent_name=agent_name,
+            patient_id=patient_id
+        )
 
 
 # Global supervisor instance

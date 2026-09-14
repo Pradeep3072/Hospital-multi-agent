@@ -58,8 +58,11 @@ class DoctorAgent:
             try:
                 from google import genai
                 client = genai.Client(api_key=settings.GEMINI_API_KEY)
+                history_text = context.get("history_text", "")
+                history_section = f"Recent Conversation History:\n{history_text}\n\n" if history_text else ""
                 prompt = (
                     f"You are the Doctor Discovery Specialist for HopeCare General Hospital.\n"
+                    f"{history_section}"
                     f"Doctor Data Retrieved:\n{json.dumps(tool_results, indent=2)}\n\n"
                     f"User Query: {message}\n"
                     f"Present the matching doctors, specialties, consultation fees, and available time slots clearly."

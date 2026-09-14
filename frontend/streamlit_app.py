@@ -147,6 +147,18 @@ with st.sidebar:
         ]
     )
 
+    # Memory Status Indicator
+    try:
+        mem_r = requests.get(f"{API_BASE}/chat/status", timeout=2)
+        if mem_r.status_code == 200:
+            mem_data = mem_r.json()
+            if mem_data.get("redis_connected"):
+                st.success("⚡ **Memory:** Redis Active")
+            else:
+                st.info("💾 **Memory:** Local Fast Store")
+    except Exception:
+        pass
+
     st.markdown("---")
     st.markdown(
         """
@@ -164,12 +176,32 @@ with st.sidebar:
 # 1. AI Assistant Page
 # -------------------------------------------------------------
 if navigation == "💬 AI Assistant":
-    st.markdown("""
-    <div class="main-header">
-        <h1>HopeCare Multi-Agent AI Assistant</h1>
-        <p>Grounded orchestration across specialized sub-agents: Hospital Info, Doctor Discovery, Patient Records, and Appointments.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    hcol1, hcol2 = st.columns([4, 1])
+    with hcol1:
+        st.markdown("""
+        <div class="main-header">
+            <h1>HopeCare Multi-Agent AI Assistant</h1>
+            <p>Grounded orchestration across specialized sub-agents: Hospital Info, Doctor Discovery, Patient Records, and Appointments.</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with hcol2:
+        st.write("")
+        st.write("")
+        if st.button("🗑️ Clear Chat", help="Clear conversation history from active memory"):
+            session_id = f"streamlit-session-{current_patient_id}"
+            try:
+                requests.delete(f"{API_BASE}/chat/history/{session_id}", timeout=3)
+            except Exception:
+                pass
+            st.session_state.chat_history = [
+                {
+                    "role": "assistant",
+                    "agent": "Root Supervisor",
+                    "is_emergency": False,
+                    "content": "Conversation cleared! How may I assist you today?"
+                }
+            ]
+            st.rerun()
 
     # Quick prompts chips
     st.write("💡 **Suggested Inquiries:**")

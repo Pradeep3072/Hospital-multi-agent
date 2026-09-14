@@ -39,9 +39,12 @@ class HospitalAgent:
             try:
                 from google import genai
                 client = genai.Client(api_key=settings.GEMINI_API_KEY)
+                history_text = context.get("history_text", "")
+                history_section = f"Recent Conversation History:\n{history_text}\n\n" if history_text else ""
                 prompt = (
                     f"You are the Hospital Information Agent for HopeCare General Hospital.\n"
-                    f"Answer the user's question accurately using ONLY the provided hospital knowledge:\n"
+                    f"Answer the user's question accurately using the provided hospital knowledge and conversation context:\n"
+                    f"{history_section}"
                     f"Tool Findings:\n{json.dumps(tool_results, indent=2)}\n\n"
                     f"User Query: {message}\n"
                     f"Provide a warm, professional, and well-formatted response with bullet points if helpful."
