@@ -175,12 +175,44 @@ class DoctorAgent:
         client = get_gemini_client()
         if client:
             try:
+                # Construct compact, low-latency summary for LLM prompt
+                summary_data = {}
+                if "available_doctors" in tool_results:
+                    avail_docs = tool_results["available_doctors"]
+                    summary_data["target_date"] = tool_results.get("target_date")
+                    summary_data["day_of_week"] = tool_results.get("day_of_week")
+                    summary_data["available_specialists"] = [
+                        {
+                            "name": d["name"],
+                            "specialty": d.get("specialization"),
+                            "fee": f"${d.get('consultation_fee', 100):.0f}",
+                            "open_slots_count": len(d.get("available_slots", [])),
+                            "open_slots_sample": d.get("available_slots", [])[:6]
+                        }
+                        for d in avail_docs[:5]
+                    ]
+                elif "slots" in tool_results:
+                    summary_data["doctor"] = tool_results.get("doctor", {}).get("doctor", {}).get("name")
+                    summary_data["date"] = tool_results.get("target_date")
+                    summary_data["open_slots"] = tool_results.get("slots", {}).get("slots", [])[:8]
+                elif "doctors" in tool_results:
+                    doc_list = tool_results["doctors"].get("doctors", []) if isinstance(tool_results["doctors"], dict) else tool_results["doctors"]
+                    summary_data["physicians"] = [
+                        {
+                            "name": d["name"],
+                            "specialty": d.get("specialization"),
+                            "fee": f"${d.get('consultation_fee', 100):.0f}",
+                            "experience": f"{d.get('experience_years', 5)} yrs"
+                        }
+                        for d in doc_list[:5]
+                    ]
+
                 prompt = (
                     f"You are the Doctor Specialist Agent for HopeCare General Hospital.\n"
-                    f"Relevant Physician & Availability Data:\n{json.dumps(tool_results, indent=2)}\n\n"
+                    f"Physician Findings:\n{json.dumps(summary_data, indent=2)}\n\n"
                     f"User Query: {message}\n"
-                    f"Provide an informative, welcoming recommendation detailing the doctor's name, specialization, "
-                    f"consultation fee, and their available appointment slots for the requested date. Explain how the patient can book an appointment."
+                    f"Provide a warm, scannable recommendation (under 120 words) detailing physician names, specialties, "
+                    f"and available booking slots. Inform the user they can click 'Book Slot' on any physician card below or reply to confirm."
                 )
                 response = client.models.generate_content(
                     model=settings.GEMINI_MODEL,
@@ -194,6 +226,7 @@ class DoctorAgent:
                 }
             except Exception:
                 pass
+
 
         # Deterministic formatting fallback
         output = []

@@ -186,107 +186,126 @@ class RootSupervisorAgent:
                 "response": emerg_resp
             }
 
-        # 2. Execute via Google ADK Runner if API key is active
-        if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "your-gemini-api-key-here":
-            try:
-                adk_message = types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=f"[Active Patient ID: {patient_id}]\n{message}")]
-                )
-                
-                delegated_adk_name = "root_supervisor"
-                tools_called: List[str] = []
-                tool_results: Dict[str, Any] = {}
-                response_text = ""
-
-                t_adk_start = time.time()
-                for event in self.adk_runner.run(
-                    user_id=f"patient_{patient_id}",
-                    session_id=session_id,
-                    new_message=adk_message
-                ):
-                    if event.actions and event.actions.transfer_to_agent:
-                        delegated_adk_name = event.actions.transfer_to_agent
-                    elif event.author and event.author != "root_supervisor":
-                        delegated_adk_name = event.author
-
-                    if event.content and event.content.parts:
-                        for part in event.content.parts:
-                            if part.function_call:
-                                tools_called.append(part.function_call.name)
-                            if part.function_response:
-                                call_key = tools_called[-1] if tools_called else "result"
-                                tool_results[call_key] = part.function_response.response
-                            if part.text:
-                                response_text += part.text
-                t_adk_end = time.time()
-
-                delegated_display = AGENT_NAME_MAP.get(delegated_adk_name, "Hospital Agent")
-                route = AGENT_ROUTE_MAP.get(delegated_adk_name, self.route_intent(message, pre_checked_emergency=True))
-                trace.add_event("adk_orchestration.run", "agent_execution", t_adk_start, t_adk_end, details={"agent": delegated_display, "tools": tools_called})
-
-                if response_text.strip():
-                    t_mem_start = time.time()
-                    self._save_memory(session_id, patient_id, message, response_text, delegated_display)
-                    t_mem_end = time.time()
-                    trace.add_event("memory_session.add_turn", "memory_io", t_mem_start, t_mem_end)
-
-                    trace.finalize(route, delegated_display, response_text, tools_called, is_emergency=False)
-                    agent_profiler.record_trace(trace)
-
-                    return {
-                        "route": route,
-                        "supervisor": self.name,
-                        "delegated_agent": delegated_display,
-                        "is_emergency": False,
-                        "tools_called": tools_called,
-                        "tool_results": tool_results,
-                        "response": response_text
-                    }
-            except Exception as e:
-                # Log notice and seamlessly use deterministic agent fallback
-                print(f"Notice: Google ADK live execution exception ({e}). Falling back to sub-agent handler.")
-
-        # 3. Deterministic Sub-Agent Fallback
+        # 2. Fast-Path Direct Sub-Agent Dispatch (High-throughput, ultra-low latency)
         t_route_start = time.time()
         route = self.route_intent(message, pre_checked_emergency=True)
         t_route_end = time.time()
         trace.add_event("supervisor.route_intent", "routing", t_route_start, t_route_end, details={"route": route})
 
-        t_agent_start = time.time()
-        if route == "appointment":
-            res = self.appointment_agent.process(message, context)
-        elif route == "patient":
-            res = self.patient_agent.process(message, context)
-        elif route == "doctor":
-            res = self.doctor_agent.process(message, context)
-        elif route == "medical":
-            res = self.medical_agent.process(message, context)
-        else:
-            res = self.hospital_agent.process(message, context)
-        t_agent_end = time.time()
+        try:
+            t_agent_start = time.time()
+            if route == "appointment":
+                res = self.appointment_agent.process(message, context)
+            elif route == "patient":
+                res = self.patient_agent.process(message, context)
+            elif route == "doctor":
+                res = self.doctor_agent.process(message, context)
+            elif route == "medical":
+                res = self.medical_agent.process(message, context)
+            else:
+                res = self.hospital_agent.process(message, context)
+            t_agent_end = time.time()
 
-        agent_name = res.get("agent", "Hospital Agent")
-        tools_called = res.get("tools_called", [])
-        trace.add_event(f"{agent_name}.process", "agent_execution", t_agent_start, t_agent_end, details={"tools": tools_called})
+            agent_name = res.get("agent", "Hospital Agent")
+            tools_called = res.get("tools_called", [])
+            tool_results = res.get("tool_results", {})
+            response_text = res.get("response", "")
 
-        t_mem_start = time.time()
-        self._save_memory(session_id, patient_id, message, res["response"], agent_name)
-        t_mem_end = time.time()
-        trace.add_event("memory_session.add_turn", "memory_io", t_mem_start, t_mem_end)
+            trace.add_event(f"{agent_name}.process", "agent_execution", t_agent_start, t_agent_end, details={"tools": tools_called})
 
-        trace.finalize(route, agent_name, res["response"], tools_called, is_emergency=False)
-        agent_profiler.record_trace(trace)
+            t_mem_start = time.time()
+            self._save_memory(session_id, patient_id, message, response_text, agent_name)
+            t_mem_end = time.time()
+            trace.add_event("memory_session.add_turn", "memory_io", t_mem_start, t_mem_end)
 
-        return {
-            "route": route,
-            "supervisor": self.name,
-            "delegated_agent": agent_name,
-            "is_emergency": False,
-            "tools_called": tools_called,
-            "tool_results": res.get("tool_results", {}),
-            "response": res["response"]
-        }
+            trace.finalize(route, agent_name, response_text, tools_called, is_emergency=False)
+            agent_profiler.record_trace(trace)
+
+            return {
+                "route": route,
+                "supervisor": self.name,
+                "delegated_agent": agent_name,
+                "is_emergency": False,
+                "tools_called": tools_called,
+                "tool_results": tool_results,
+                "response": response_text
+            }
+
+        except Exception as err:
+            # Fallback to Google ADK Runner if direct sub-agent dispatch encounters an exception
+            print(f"Notice: Direct dispatch exception ({err}). Falling back to Google ADK Runner.")
+            if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "your-gemini-api-key-here":
+                try:
+                    adk_message = types.Content(
+                        role="user",
+                        parts=[types.Part.from_text(text=f"[Active Patient ID: {patient_id}]\n{message}")]
+                    )
+                    delegated_adk_name = "root_supervisor"
+                    tools_called: List[str] = []
+                    tool_results: Dict[str, Any] = {}
+                    response_text = ""
+
+                    t_adk_start = time.time()
+                    for event in self.adk_runner.run(
+                        user_id=f"patient_{patient_id}",
+                        session_id=session_id,
+                        new_message=adk_message
+                    ):
+                        if event.actions and event.actions.transfer_to_agent:
+                            delegated_adk_name = event.actions.transfer_to_agent
+                        elif event.author and event.author != "root_supervisor":
+                            delegated_adk_name = event.author
+
+                        if event.content and event.content.parts:
+                            for part in event.content.parts:
+                                if part.function_call:
+                                    tools_called.append(part.function_call.name)
+                                if part.function_response:
+                                    call_key = tools_called[-1] if tools_called else "result"
+                                    tool_results[call_key] = part.function_response.response
+                                if part.text:
+                                    response_text += part.text
+                    t_adk_end = time.time()
+
+                    delegated_display = AGENT_NAME_MAP.get(delegated_adk_name, "Hospital Agent")
+                    route = AGENT_ROUTE_MAP.get(delegated_adk_name, route)
+                    trace.add_event("adk_orchestration.run", "agent_execution", t_adk_start, t_adk_end, details={"agent": delegated_display, "tools": tools_called})
+
+                    if response_text.strip():
+                        t_mem_start = time.time()
+                        self._save_memory(session_id, patient_id, message, response_text, delegated_display)
+                        t_mem_end = time.time()
+                        trace.add_event("memory_session.add_turn", "memory_io", t_mem_start, t_mem_end)
+
+                        trace.finalize(route, delegated_display, response_text, tools_called, is_emergency=False)
+                        agent_profiler.record_trace(trace)
+
+                        return {
+                            "route": route,
+                            "supervisor": self.name,
+                            "delegated_agent": delegated_display,
+                            "is_emergency": False,
+                            "tools_called": tools_called,
+                            "tool_results": tool_results,
+                            "response": response_text
+                        }
+                except Exception as adk_err:
+                    print(f"Notice: Google ADK runner error ({adk_err})")
+
+            # Final safety fallback
+            fallback_resp = "I am here to assist you. Could you please specify how I can help with doctors, appointments, or hospital services?"
+            trace.finalize(route, "Root Supervisor", fallback_resp, [], is_emergency=False)
+            agent_profiler.record_trace(trace)
+            return {
+                "route": route,
+                "supervisor": self.name,
+                "delegated_agent": "Root Supervisor",
+                "is_emergency": False,
+                "tools_called": [],
+                "tool_results": {},
+                "response": fallback_resp
+            }
+
 
     def _save_memory(self, session_id: str, patient_id: int, user_msg: str, agent_response: str, agent_name: str):
         """

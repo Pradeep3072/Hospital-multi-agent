@@ -31,12 +31,12 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Ensure GOOGLE_API_KEY is available in os.environ for Google ADK
+# Ensure GOOGLE_API_KEY is available in os.environ for Google ADK and GenAI
 if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "your-gemini-api-key-here":
-    if not os.environ.get("GOOGLE_API_KEY"):
-        os.environ["GOOGLE_API_KEY"] = settings.GEMINI_API_KEY
-    if not os.environ.get("GEMINI_API_KEY"):
-        os.environ["GEMINI_API_KEY"] = settings.GEMINI_API_KEY
+    os.environ["GOOGLE_API_KEY"] = settings.GEMINI_API_KEY
+    if "GEMINI_API_KEY" in os.environ:
+        del os.environ["GEMINI_API_KEY"]
+
 
 _gemini_client = None
 

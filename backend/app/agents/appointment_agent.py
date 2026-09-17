@@ -383,7 +383,20 @@ class AppointmentAgent:
                 tool_results["doctors"] = search_doctors(specialty=specialty)
                 docs = tool_results["doctors"].get("doctors", [])
                 if docs:
-                    doc_list = "\n".join([f"- **Dr. {d['name']}** ({d['specialization']}) — Fee: ${d['consultation_fee']:.2f} (ID: #{d['doctor_id']})" for d in docs])
+                    seen_names = set()
+                    doc_lines = []
+                    for d in docs:
+                        dname = d['name'] if str(d['name']).startswith('Dr.') else f"Dr. {d['name']}"
+                        if dname in seen_names:
+                            continue
+                        seen_names.add(dname)
+                        did = d.get('id', d.get('doctor_id', ''))
+                        fee = d.get('consultation_fee', 100)
+                        spec = d.get('specialization', specialty.capitalize())
+                        doc_lines.append(f"- **{dname}** ({spec}) — Fee: ${fee:.2f} (ID: #{did})")
+                        if len(doc_lines) >= 5:
+                            break
+                    doc_list = "\n".join(doc_lines)
                     msg = (
                         f"Here are our available {specialty.capitalize()} specialists:\n\n{doc_list}\n\n"
                         f"Which doctor and date would you prefer?"
