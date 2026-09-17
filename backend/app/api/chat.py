@@ -27,10 +27,24 @@ def get_session_history(session_id: str, limit: int = Query(50, ge=1, le=200)):
     }
 
 
+@router.get("/sessions")
+def list_chat_sessions(patient_id: int = None, limit: int = Query(30, ge=1, le=100)):
+    """
+    Retrieves all past conversation sessions with summaries, timestamps, and message counts
+    for rendering the ChatGPT-style conversation history sidebar.
+    """
+    sessions = memory_manager.get_all_sessions(patient_id=patient_id, limit=limit)
+    return {
+        "count": len(sessions),
+        "sessions": sessions
+    }
+
+
+@router.delete("/sessions/{session_id}")
 @router.delete("/history/{session_id}")
 def clear_session_history(session_id: str):
     """
-    Flushes the active short-term session memory for a given session.
+    Flushes the active short-term session memory and database records for a given session.
     """
     cleared = memory_manager.clear_session(session_id)
     return {

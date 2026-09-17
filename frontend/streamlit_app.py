@@ -3,6 +3,7 @@ import requests
 import datetime
 import json
 import pandas as pd
+import uuid
 
 # Page Config
 st.set_page_config(
@@ -110,7 +111,17 @@ DEFAULT_WELCOME_MESSAGE = {
     )
 }
 
-def load_persisted_chat_history(session_id: str = "streamlit-session") -> list:
+def get_chat_sessions(limit: int = 30) -> list:
+    """Fetches all past conversation sessions from backend database."""
+    try:
+        r = requests.get(f"{API_BASE}/chat/sessions?limit={limit}", timeout=2)
+        if r.status_code == 200:
+            return r.json().get("sessions", [])
+    except Exception:
+        pass
+    return []
+
+def load_persisted_chat_history(session_id: str) -> list:
     """
     Restores the active conversation from the backend memory/database.
     Allows continuing the conversation seamlessly across browser refreshes.
@@ -136,9 +147,16 @@ def load_persisted_chat_history(session_id: str = "streamlit-session") -> list:
         pass
     return history
 
-# Session State Initialization (Auto-restores on page refresh)
+# Session State Initialization (ChatGPT-style session management)
+if "current_session_id" not in st.session_state:
+    existing_sessions = get_chat_sessions(limit=1)
+    if existing_sessions:
+        st.session_state.current_session_id = existing_sessions[0]["session_id"]
+    else:
+        st.session_state.current_session_id = f"session_{uuid.uuid4().hex[:8]}"
+
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = load_persisted_chat_history("streamlit-session")
+    st.session_state.chat_history = load_persisted_chat_history(st.session_state.current_session_id)
 
 # Helper to fetch patients
 def get_patients():
@@ -175,6 +193,52 @@ with st.sidebar:
         ]
     )
 
+    # ChatGPT-style Conversation History in Sidebar
+    if navigation == "💬 AI Assistant":
+        st.markdown("---")
+        if st.button("➕ New Chat", use_container_width=True, type="primary"):
+            new_id = f"session_{uuid.uuid4().hex[:8]}"
+            st.session_state.current_session_id = new_id
+            st.session_state.chat_history = [DEFAULT_WELCOME_MESSAGE]
+            st.session_state.booking_flow = None
+            st.rerun()
+
+        sidebar_sessions = get_chat_sessions(limit=25)
+        if sidebar_sessions:
+            st.markdown("##### 📜 Recent Chats")
+            for s in sidebar_sessions:
+                s_id = s["session_id"]
+                title = s.get("title") or "Conversation"
+                time_str = s.get("started_at", "")
+                msg_cnt = s.get("message_count", 0)
+                is_current = (s_id == st.session_state.get("current_session_id"))
+
+                sc1, sc2 = st.columns([5, 1])
+                with sc1:
+                    prefix = "🟢 " if is_current else "💬 "
+                    disp_title = title if len(title) <= 20 else f"{title[:18]}..."
+                    if st.button(
+                        f"{prefix}{disp_title}",
+                        key=f"sess_btn_{s_id}",
+                        help=f"{title}\n{time_str} • {msg_cnt} messages",
+                        use_container_width=True
+                    ):
+                        if s_id != st.session_state.current_session_id:
+                            st.session_state.current_session_id = s_id
+                            st.session_state.chat_history = load_persisted_chat_history(s_id)
+                            st.session_state.booking_flow = None
+                            st.rerun()
+                with sc2:
+                    if st.button("✕", key=f"del_btn_{s_id}", help=f"Delete '{title}'"):
+                        try:
+                            requests.delete(f"{API_BASE}/chat/sessions/{s_id}", timeout=2)
+                        except Exception:
+                            pass
+                        if s_id == st.session_state.current_session_id:
+                            st.session_state.current_session_id = f"session_{uuid.uuid4().hex[:8]}"
+                            st.session_state.chat_history = [DEFAULT_WELCOME_MESSAGE]
+                        st.rerun()
+
     # Memory Status Indicator
     try:
         mem_r = requests.get(f"{API_BASE}/chat/status", timeout=2)
@@ -204,21 +268,27 @@ with st.sidebar:
 # 1. AI Assistant Page
 # -------------------------------------------------------------
 if navigation == "💬 AI Assistant":
+    active_title = "New Consultation"
+    for s in get_chat_sessions(limit=50):
+        if s["session_id"] == st.session_state.get("current_session_id"):
+            active_title = s.get("title", active_title)
+            break
+
     hcol1, hcol2 = st.columns([4, 1])
     with hcol1:
-        st.markdown("""
+        st.markdown(f"""
         <div class="main-header">
             <h1>HopeCare Multi-Agent AI Assistant</h1>
-            <p>Grounded orchestration across specialized sub-agents: Hospital Info, Doctor Discovery, Patient Records, and Appointments.</p>
+            <p>Active Conversation: <strong>{active_title}</strong> &nbsp;•&nbsp; <small>Thread: <code>{st.session_state.get('current_session_id', 'default')}</code></small></p>
         </div>
         """, unsafe_allow_html=True)
     with hcol2:
         st.write("")
         st.write("")
-        if st.button("🗑️ Clear Chat", help="Clear conversation history from active memory"):
-            session_id = "streamlit-session"
+        if st.button("🗑️ Clear Thread", help="Clear conversation history from active thread"):
+            curr_sid = st.session_state.get("current_session_id", "streamlit-session")
             try:
-                requests.delete(f"{API_BASE}/chat/history/{session_id}", timeout=3)
+                requests.delete(f"{API_BASE}/chat/sessions/{curr_sid}", timeout=3)
             except Exception:
                 pass
             st.session_state.chat_history = [
@@ -422,7 +492,7 @@ if navigation == "💬 AI Assistant":
             try:
                 payload = {
                     "message": user_input,
-                    "session_id": "streamlit-session"
+                    "session_id": st.session_state.get("current_session_id", "streamlit-session")
                 }
                 r = requests.post(f"{API_BASE}/chat", json=payload, timeout=15)
                 if r.status_code == 200:

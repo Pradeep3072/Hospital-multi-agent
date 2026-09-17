@@ -218,10 +218,18 @@ class SessionMemoryManager:
         try:
             conv = db.query(Conversation).filter(Conversation.session_id == session_id).first()
             if not conv:
-                conv = Conversation(session_id=session_id, patient_id=patient_id or 1)
+                title = content[:45].strip() if role == "user" else "New Conversation"
+                conv = Conversation(
+                    session_id=session_id,
+                    patient_id=patient_id or 1,
+                    summary=title
+                )
                 db.add(conv)
                 db.commit()
                 db.refresh(conv)
+            elif (not conv.summary or conv.summary == "New Conversation") and role == "user":
+                conv.summary = content[:45].strip()
+                db.commit()
 
             rec = MemoryRecord(
                 conversation_id=conv.id,
@@ -236,6 +244,44 @@ class SessionMemoryManager:
             print(f"MemoryManager DB persist error: {e}")
         finally:
             db.close()
+
+    def get_all_sessions(self, patient_id: Optional[int] = None, limit: int = 30) -> List[Dict[str, Any]]:
+        """
+        Retrieves all past conversation sessions with summaries, timestamps, and message counts.
+        """
+        db = SessionLocal()
+        sessions = []
+        try:
+            q = db.query(Conversation)
+            if patient_id:
+                q = q.filter((Conversation.patient_id == patient_id) | (Conversation.patient_id == None))
+            convs = q.order_by(Conversation.id.desc()).limit(limit).all()
+            for c in convs:
+                recs = (
+                    db.query(MemoryRecord)
+                    .filter(MemoryRecord.conversation_id == c.id)
+                    .order_by(MemoryRecord.id.asc())
+                    .all()
+                )
+                if not recs:
+                    continue
+
+                title = c.summary
+                if not title or title == "New Conversation":
+                    first_user = next((r for r in recs if r.role == "user"), None)
+                    title = first_user.content[:45].strip() if first_user else f"Conversation #{c.id}"
+
+                sessions.append({
+                    "session_id": c.session_id,
+                    "title": title,
+                    "message_count": len(recs),
+                    "started_at": c.started_at.strftime("%b %d, %H:%M") if c.started_at else ""
+                })
+        except Exception as e:
+            print(f"MemoryManager get_all_sessions error: {e}")
+        finally:
+            db.close()
+        return sessions
 
     def _load_from_db(self, session_id: str, limit: int) -> List[Dict[str, Any]]:
         db = SessionLocal()
