@@ -4,6 +4,7 @@ import datetime
 import json
 import pandas as pd
 import uuid
+import re
 
 # Page Config
 st.set_page_config(
@@ -146,6 +147,107 @@ def load_persisted_chat_history(session_id: str) -> list:
     except Exception:
         pass
     return history
+
+
+def extract_booking_intent(user_msg: str, agent_data: dict) -> dict | None:
+    """
+    Detects if the user requested to book/schedule an appointment, and extracts any
+    specifically mentioned doctor name, doctor ID, specialty, or date.
+    Returns a configuration dict for the interactive slot booking widget, or None.
+    """
+    msg_l = user_msg.lower()
+
+    # If the user is specifically requesting a cancellation or reschedule with an appointment ID, do not open booking
+    if any(w in msg_l for w in ["cancel", "delete", "reschedule"]) and re.search(r"#?\d+", msg_l):
+        return None
+
+    # Check booking intent
+    booking_keywords = ["book", "bok", "schedule", "reserve", "appointment", "consultation", "slot", "slots"]
+    has_keyword = any(w in msg_l for w in booking_keywords)
+    is_appt_agent = agent_data.get("delegated_agent") == "Appointment Agent" or agent_data.get("route") == "appointment"
+    tr = agent_data.get("tool_results", {})
+
+    if not (has_keyword or is_appt_agent or tr.get("show_booking_widget") or tr.get("booking_intent") or tr.get("auto_select_doctor")):
+        return None
+
+    # 1. Doctor detection
+    doc_id = None
+    doc_name = None
+    if tr.get("auto_select_doctor"):
+        doc_id = tr["auto_select_doctor"].get("id")
+        doc_name = tr["auto_select_doctor"].get("name")
+    elif tr.get("booking_intent", {}).get("doctor_id"):
+        doc_id = tr["booking_intent"]["doctor_id"]
+
+    if not doc_id:
+        # Match by ID: "doctor 1", "dr. 4", "dr #2"
+        m_id = re.search(r"(?:doctor\s*|dr\.?\s*)#?(\d+)", msg_l)
+        if m_id:
+            doc_id = int(m_id.group(1))
+
+    if not doc_id and not doc_name:
+        known_docs = [
+            ("mitchell", "Dr. Sarah Mitchell"),
+            ("chen", "Dr. Emily Chen"),
+            ("vance", "Dr. Marcus Vance"),
+            ("wilson", "Dr. Robert Wilson"),
+            ("patel", "Dr. James Patel"),
+            ("cuddy", "Dr. Lisa Cuddy"),
+            ("house", "Dr. Gregory House"),
+            ("cameron", "Dr. Allison Cameron"),
+            ("agarwal", "Dr. Agarwal"),
+            ("lohit", "Dr. Lohit"),
+            ("rajaji", "Dr. Rajaji")
+        ]
+        for sub, full_name in known_docs:
+            if sub in msg_l:
+                doc_name = full_name
+                break
+
+    # 2. Specialty detection
+    specialty = None
+    if tr.get("booking_intent", {}).get("specialty"):
+        specialty = tr["booking_intent"]["specialty"]
+    if not specialty:
+        spec_map = {
+            "cardio": "Cardiology",
+            "heart": "Cardiology",
+            "neuro": "Neurology",
+            "brain": "Neurology",
+            "pedia": "Pediatrics",
+            "child": "Pediatrics",
+            "ortho": "Orthopedics",
+            "bone": "Orthopedics",
+            "joint": "Orthopedics",
+            "general medicine": "General Medicine",
+            "internal medicine": "General Medicine",
+            "physician": "General Medicine",
+            "emergency": "Emergency & Trauma",
+            "trauma": "Emergency & Trauma"
+        }
+        for kw, spec_val in spec_map.items():
+            if kw in msg_l:
+                specialty = spec_val
+                break
+
+    # 3. Target Date detection
+    target_date = None
+    date_match = re.search(r"\b(202\d-\d{2}-\d{2})\b", user_msg)
+    if date_match:
+        target_date = date_match.group(1)
+    elif "tomorrow" in msg_l:
+        target_date = str(datetime.date.today() + datetime.timedelta(days=1))
+    elif "today" in msg_l:
+        target_date = str(datetime.date.today())
+
+    return {
+        "active": True,
+        "filter_doctor_id": doc_id,
+        "filter_doctor_name": doc_name,
+        "filter_specialty": specialty,
+        "target_date": target_date
+    }
+
 
 # Session State Initialization (ChatGPT-style session management)
 if "current_session_id" not in st.session_state:
@@ -384,57 +486,161 @@ if navigation == "💬 AI Assistant":
     # Interactive Calendar & Slot Booking Widget
     if st.session_state.get("booking_flow"):
         bf = st.session_state.booking_flow
+
+        # Fetch all available doctors from backend API
+        try:
+            all_doctors_resp = requests.get(f"{API_BASE}/doctors", timeout=3)
+            all_doctors = all_doctors_resp.json() if all_doctors_resp.status_code == 200 else []
+        except Exception:
+            all_doctors = []
+
+        # Deduplicate doctors by name + specialization to keep selector clean
+        unique_doctors = []
+        seen_keys = set()
+        for d in all_doctors:
+            k = (d["name"].strip().lower(), d.get("specialization", "").strip().lower())
+            if k not in seen_keys:
+                seen_keys.add(k)
+                unique_doctors.append(d)
+
+        if not unique_doctors:
+            unique_doctors = all_doctors
+
+        # Filter doctors based on explicitly mentioned doctor or specialty
+        f_doc_id = bf.get("filter_doctor_id") or bf.get("doctor_id")
+        f_doc_name = bf.get("filter_doctor_name") or bf.get("doctor_name")
+        f_spec = bf.get("filter_specialty") or bf.get("specialty")
+
+        filtered_docs = unique_doctors
+        if f_doc_id:
+            matching = [d for d in unique_doctors if d["id"] == f_doc_id]
+            if matching:
+                filtered_docs = matching
+        elif f_doc_name:
+            matching = [d for d in unique_doctors if f_doc_name.lower() in d["name"].lower()]
+            if matching:
+                filtered_docs = matching
+        elif f_spec:
+            spec_lower = f_spec.lower()
+            matching = [
+                d for d in unique_doctors
+                if spec_lower in d.get("specialization", "").lower()
+                or spec_lower in d.get("department", "").lower()
+            ]
+            if matching:
+                filtered_docs = matching
+
+        if not filtered_docs:
+            filtered_docs = unique_doctors
+
         with st.container(border=True):
-            b_head1, b_head2 = st.columns([4, 1])
+            b_head1, b_head2 = st.columns([5, 1])
             with b_head1:
-                st.markdown(f"### 🗓️ Book Consultation with **{bf['doctor_name']}** ({bf['specialty']})")
-                st.caption(f"Consultation Fee: ${bf['fee']:.0f} | HopeCare In-Person Clinic")
+                if len(filtered_docs) == 1:
+                    single_doc = filtered_docs[0]
+                    st.markdown(f"### 🗓️ Book Consultation with **{single_doc['name']}**")
+                    st.caption(f"Specialty: {single_doc.get('specialization', single_doc.get('department', 'General'))} | Consultation Fee: ${single_doc.get('consultation_fee', 100):.0f} | Room: {single_doc.get('room_number', 'Clinic Room')}")
+                elif f_spec:
+                    st.markdown(f"### 🗓️ Book Consultation — **{f_spec.capitalize()}** Specialists")
+                    st.caption(f"Select your {f_spec} physician, choose consultation date, and reserve an open time slot:")
+                else:
+                    st.markdown("### 🗓️ Book an Appointment — Select Doctor & Time Slot")
+                    st.caption("Select your physician from the dropdown, choose consultation date, and reserve an open time slot:")
             with b_head2:
                 if st.button("✖ Close", key="close_booking_drawer"):
                     st.session_state.booking_flow = None
                     st.rerun()
 
-            c_date, c_pt = st.columns(2)
-            with c_date:
+            col_doc_sel, col_date_sel = st.columns([1.5, 1])
+
+            # 1. Doctor Selection Dropdown
+            with col_doc_sel:
+                if len(filtered_docs) == 1:
+                    chosen_doctor = filtered_docs[0]
+                    st.selectbox(
+                        "🩺 Selected Doctor:",
+                        options=[f"{chosen_doctor['name']} — {chosen_doctor.get('specialization', chosen_doctor.get('department', 'General'))} (${chosen_doctor.get('consultation_fee', 100):.0f})"],
+                        disabled=True,
+                        key="booking_doc_disabled"
+                    )
+                else:
+                    doc_option_map = {
+                        f"{d['name']} — {d.get('specialization', d.get('department', 'General'))} (${d.get('consultation_fee', 100):.0f})": d
+                        for d in filtered_docs
+                    }
+                    doc_label_prompt = f"🩺 Select {f_spec.capitalize()} Doctor:" if f_spec else "🩺 Select Doctor:"
+                    sel_label = st.selectbox(
+                        doc_label_prompt,
+                        options=list(doc_option_map.keys()),
+                        key="booking_doc_select"
+                    )
+                    chosen_doctor = doc_option_map[sel_label]
+
+            # 2. Date Selection Picker (Calendar)
+            with col_date_sel:
                 min_date = datetime.date.today()
+                default_date = min_date + datetime.timedelta(days=1)
+                if bf.get("target_date"):
+                    try:
+                        parsed_d = datetime.date.fromisoformat(bf["target_date"])
+                        if parsed_d >= min_date:
+                            default_date = parsed_d
+                    except Exception:
+                        pass
                 selected_date = st.date_input(
                     "📅 Choose Date (Calendar):",
                     min_value=min_date,
-                    value=min_date + datetime.timedelta(days=1),
+                    value=default_date,
                     key="chat_booking_date_picker"
                 )
-            with c_pt:
+
+            # 3. Patient Information Row
+            c_pt_name, c_reason = st.columns([1.5, 1])
+            with c_pt_name:
                 patient_name_input = st.text_input(
                     "👤 Patient Full Name:",
-                    value="",
+                    value="John Doe",
                     placeholder="Type patient's full name (e.g. John Doe)",
                     key="chat_booking_patient_name_input"
                 )
+            with c_reason:
+                reason_text = st.text_input(
+                    "📝 Reason for Visit:",
+                    value="Consultation",
+                    key="chat_reason_input"
+                )
 
-            # Fetch slots dynamically for chosen doctor & date
+            # 4. Fetch Slots Dynamically for Chosen Doctor & Date
             date_str = selected_date.strftime("%Y-%m-%d")
             try:
-                slots_res = requests.get(f"{API_BASE}/doctors/{bf['doctor_id']}/slots?date={date_str}", timeout=3).json()
+                slots_res = requests.get(f"{API_BASE}/doctors/{chosen_doctor['id']}/slots?date={date_str}", timeout=3).json()
                 open_slots = slots_res.get("slots", [])
             except Exception:
                 open_slots = []
 
+            # 5. Time Slot Dropdown & Confirm Button
             if open_slots:
-                st.success(f"Found {len(open_slots)} open slots for {selected_date.strftime('%A, %B %d, %Y')}:")
-                col_s, col_r = st.columns([2, 2])
-                with col_s:
-                    selected_slot = st.selectbox("⏰ Choose Available Time Slot:", options=open_slots, key="chat_slot_select")
-                with col_r:
-                    reason_text = st.text_input("📝 Reason for Visit:", value="Consultation", key="chat_reason_input")
+                st.success(f"Found {len(open_slots)} available consultation slots for {chosen_doctor['name']} on {selected_date.strftime('%A, %B %d, %Y')}:")
+                col_slot, col_submit = st.columns([2, 1])
+                with col_slot:
+                    selected_slot = st.selectbox(
+                        "⏰ Choose Available Time Slot:",
+                        options=open_slots,
+                        key="chat_slot_select"
+                    )
+                with col_submit:
+                    st.write("")
+                    st.write("")
+                    confirm_clicked = st.button("✅ Confirm & Book", type="primary", key="chat_confirm_book_btn", use_container_width=True)
 
-                if st.button("✅ Confirm & Book Appointment", type="primary", key="chat_confirm_book_btn"):
+                if confirm_clicked:
                     clean_pname = patient_name_input.strip()
                     if not clean_pname:
                         st.error("⚠️ Please type the patient's full name before confirming.")
                     else:
                         book_payload = {
                             "patient_name": clean_pname,
-                            "doctor_id": bf["doctor_id"],
+                            "doctor_id": chosen_doctor["id"],
                             "date": date_str,
                             "time": selected_slot,
                             "reason": reason_text
@@ -444,7 +650,7 @@ if navigation == "💬 AI Assistant":
                             if b_resp.status_code == 200:
                                 b_data = b_resp.json()
                                 st.balloons()
-                                
+
                                 # Add confirmed booking to chat history
                                 st.session_state.chat_history.append({
                                     "role": "assistant",
@@ -456,7 +662,7 @@ if navigation == "💬 AI Assistant":
                                         f"🎉 **Appointment Successfully Confirmed!**\n\n"
                                         f"- **Appointment ID**: `#{b_data.get('appointment_id')}`\n"
                                         f"- **Patient**: {clean_pname}\n"
-                                        f"- **Doctor**: {bf['doctor_name']} ({bf['specialty']})\n"
+                                        f"- **Doctor**: {chosen_doctor['name']} ({chosen_doctor.get('specialization', 'General')})\n"
                                         f"- **Date**: {date_str} ({selected_date.strftime('%A')})\n"
                                         f"- **Time**: {selected_slot}\n"
                                         f"- **Reason**: {reason_text}\n\n"
@@ -472,7 +678,7 @@ if navigation == "💬 AI Assistant":
                         except Exception as e:
                             st.error(f"Failed to submit booking: {e}")
             else:
-                st.warning(f"No available consultation slots for {bf['doctor_name']} on {selected_date.strftime('%A, %b %d')}. Please select another weekday.")
+                st.warning(f"No available consultation slots for {chosen_doctor['name']} on {selected_date.strftime('%A, %b %d')}. Please select another date or doctor.")
 
 
     # Input handling
@@ -506,15 +712,10 @@ if navigation == "💬 AI Assistant":
                         "content": data["response"]
                     })
 
-                    # If a specific doctor or specialty was requested, auto-open the booking table for that selection
-                    auto_doc = data.get("tool_results", {}).get("auto_select_doctor")
-                    if auto_doc:
-                        st.session_state.booking_flow = {
-                            "doctor_id": auto_doc["id"],
-                            "doctor_name": auto_doc["name"],
-                            "specialty": auto_doc.get("specialization", auto_doc.get("department", "General")),
-                            "fee": auto_doc.get("consultation_fee", 100)
-                        }
+                    # Check for booking intent to activate interactive doctor dropdown & slot booking widget
+                    b_intent = extract_booking_intent(user_input, data)
+                    if b_intent:
+                        st.session_state.booking_flow = b_intent
                     st.rerun()
                 else:
                     st.error(f"Error from agent backend: {r.text}")

@@ -54,7 +54,8 @@ adk_root_agent = Agent(
         "- patient_agent: Authenticated patient profiles, active prescriptions, medical history, and past appointments.\n"
         "- hospital_agent: Visiting hours, cafeteria, parking, departments, diagnostic services, and accepted insurances.\n"
         "- medical_agent: Approved general health education, diabetes/hypertension guides, and post-op wound care.\n"
-        "Delegate to the specialized sub-agent using transfer_to_agent to formulate the answer."
+        "Delegate to the specialized sub-agent using transfer_to_agent to formulate the answer.\n"
+        "IMPORTANT: When transferring to appointment_agent, appointments must NEVER be booked automatically. Patients must always be prompted to choose their doctor, date, and preferred time slot."
     ),
     sub_agents=[
         emergency_agent,

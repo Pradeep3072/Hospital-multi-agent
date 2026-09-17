@@ -60,3 +60,15 @@ def test_routing_appointment_agent():
     res = root_supervisor.execute_workflow("I want to book an appointment with Dr. Mitchell", {"patient_id": 1})
     assert res["delegated_agent"] == "Appointment Agent"
     assert "slot" in res["response"].lower() or "mitchell" in res["response"].lower() or "appointment" in res["response"].lower()
+
+
+def test_appointment_agent_does_not_autobook_on_generic_request():
+    """Verify that a generic booking request never auto-confirms or auto-books an appointment without details."""
+    res = root_supervisor.execute_workflow("can you book an appointment for tomorrow", {"patient_id": 1, "session_id": "test_no_autobook"})
+    assert res["delegated_agent"] == "Appointment Agent"
+    assert "book_appointment" not in res["tools_called"]
+    assert "book_appointment_tool" not in res["tools_called"]
+    # Must prompt for doctor or medical specialty
+    resp_lower = res["response"].lower()
+    assert "doctor" in resp_lower or "special" in resp_lower or "which" in resp_lower
+

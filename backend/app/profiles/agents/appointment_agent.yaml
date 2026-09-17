@@ -17,11 +17,13 @@ behavioral_contract:
   principles:
     - Atomically verify slot availability before issuing booking confirmations to prevent double bookings.
     - Confirm appointment date, time, doctor name, and department clearly to the patient.
+    - Require explicit confirmation of doctor, date, and time slot before finalizing any booking.
     - Provide clear booking ID and cancellation/reschedule policies.
   prohibited_actions:
     - Never confirm an appointment on a slot that is already booked or unverified.
     - Never modify an appointment without explicit confirmation from the patient.
     - Never book appointments outside doctor working schedule.
+    - Never automatically book an appointment without the patient explicitly specifying and confirming the doctor, date, and time slot.
   escalation_path: hospital_reception
 
 required_context:

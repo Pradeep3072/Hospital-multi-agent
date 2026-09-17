@@ -11,6 +11,18 @@ from backend.app.config import settings
 
 
 # Google ADK Tools for Appointment Agent
+def search_doctors_tool(query: str = "", specialty: str = "") -> Dict[str, Any]:
+    """
+    Search doctors by physician name, bio keywords, or medical specialization.
+    Use this when a patient mentions a medical specialty to find available doctors.
+    
+    Args:
+        query: Physician name or free-text query.
+        specialty: Medical specialty filter (e.g. 'Cardiology', 'Orthopedics', 'Pediatrics', 'Neurology', 'General Medicine').
+    """
+    return search_doctors(query=query if query else None, specialty=specialty if specialty else None)
+
+
 def book_appointment_tool(
     patient_id: int,
     doctor_id: int,
@@ -19,14 +31,17 @@ def book_appointment_tool(
     reason: str = "Consultation"
 ) -> Dict[str, Any]:
     """
-    Transaction-safe booking tool. Books an appointment slot for a patient with a doctor.
+    Transaction-safe booking tool. Finalizes an appointment booking with a doctor.
+    CRITICAL: ONLY invoke this tool when the patient has explicitly confirmed ALL THREE parameters:
+    doctor_id, date_str, and time_str.
+    DO NOT guess, assume, or use default values for any parameters.
     
     Args:
-        patient_id: The ID of the patient booking the appointment.
-        doctor_id: The ID of the doctor (e.g. 1 for Dr. Mitchell, 4 for Dr. Wilson).
-        date_str: The booking date in YYYY-MM-DD format (e.g. 2026-04-10).
-        time_str: The booking time in HH:MM format (e.g. 09:00, 10:30).
-        reason: The reason for visit or consultation topic.
+        patient_id: Numeric ID of the authenticated patient.
+        doctor_id: Numeric ID of the doctor explicitly chosen by the patient.
+        date_str: Booking date in YYYY-MM-DD format explicitly chosen by the patient.
+        time_str: Booking time in HH:MM format explicitly selected by the patient from open slots.
+        reason: The reason for visit or clinical symptom described by the patient.
     """
     return book_appointment(
         patient_id=patient_id,
@@ -74,10 +89,11 @@ def reschedule_appointment_tool(
 def check_availability_tool(doctor_id: int, date_str: str) -> Dict[str, Any]:
     """
     Checks the available appointment slots for a doctor on a specific date.
+    Use this to show open consultation slots to the patient so they can choose a time.
     
     Args:
         doctor_id: The numeric ID of the doctor.
-        date_str: Date in YYYY-MM-DD format.
+        date_str: Date in YYYY-MM-DD format requested by the patient.
     """
     return check_availability(doctor_id=doctor_id, date_str=date_str)
 
@@ -86,18 +102,43 @@ def check_availability_tool(doctor_id: int, date_str: str) -> Dict[str, Any]:
 appointment_agent = Agent(
     name="appointment_agent",
     model=settings.GEMINI_MODEL,
-    description="Executes transaction-safe appointment bookings, cancellations, and reschedulings.",
+    description="Manages doctor appointments: slot verification, doctor search, and transaction-safe booking, rescheduling, or cancellation.",
     instruction=(
-        "You are the Appointment Booking Agent for HopeCare General Hospital. "
-        "You execute transaction-safe appointment operations using your provided tools: "
-        "book_appointment_tool, cancel_appointment_tool, reschedule_appointment_tool, and check_availability_tool. "
-        "When confirming a booking, clearly summarize the appointment ID, doctor, date, time, and reason."
+        "You are the Appointment Scheduling & Booking Agent for HopeCare General Hospital.\n"
+        "Your role is to guide patients step-by-step through booking, rescheduling, and cancelling appointments.\n\n"
+        "🚨 MANDATORY SAFETY & APPOINTMENT PROTOCOL — STRICT RULES:\n"
+        "1. NEVER AUTOMATICALLY BOOK AN APPOINTMENT.\n"
+        "   Under NO circumstances should you call `book_appointment_tool` unless the patient has EXPLICITLY confirmed ALL THREE requirements:\n"
+        "   - The Doctor (by name or ID)\n"
+        "   - The Specific Date (in YYYY-MM-DD format)\n"
+        "   - The Specific Time Slot (in HH:MM format, chosen from available open slots)\n\n"
+        "2. ZERO ASSUMPTIONS & NO DEFAULT VALUES:\n"
+        "   - NEVER assume or default a doctor (do NOT default to Dr. Sarah Mitchell or ID 1).\n"
+        "   - NEVER assume or default a date (do NOT pick an arbitrary date unless the user explicitly stated it).\n"
+        "   - NEVER assume or default a time slot (do NOT pick 09:00 or any slot without the patient selecting it).\n\n"
+        "3. MULTI-STEP CONVERSATIONAL FLOW:\n"
+        "   - STEP 1 (Missing Doctor / Specialty):\n"
+        "     If the patient says 'book appointment' or does not specify a physician or medical specialty, ask:\n"
+        "     'Which doctor or medical specialty (such as Cardiology, Neurology, Pediatrics, Orthopedics, or General Medicine) would you like to see, and on what date?'\n"
+        "     If they mention a specialty (e.g. 'Cardiology'), call `search_doctors_tool(specialty=...)` and list the available specialists to let them choose.\n\n"
+        "   - STEP 2 (Missing Date):\n"
+        "     If the doctor is specified but no date is provided, ask the user what date they would like to visit.\n\n"
+        "   - STEP 3 (Show Open Slots):\n"
+        "     Once the doctor and date are known, call `check_availability_tool(doctor_id=..., date_str=...)` to retrieve the real open slots.\n"
+        "     Display the open slots clearly to the patient (e.g. 09:00, 09:30, 10:00) and ask them to select their preferred time slot.\n\n"
+        "   - STEP 4 (Finalize Booking):\n"
+        "     ONLY call `book_appointment_tool` after the patient has explicitly selected their preferred time slot from the open slots.\n"
+        "     Summarize the booking: Appointment ID, Doctor Name, Date, Time, and Reason for visit.\n\n"
+        "4. CANCELLATION & RESCHEDULING:\n"
+        "   - For cancellation, require the appointment ID before calling `cancel_appointment_tool`.\n"
+        "   - For rescheduling, require the appointment ID, new date, and new time slot before calling `reschedule_appointment_tool`."
     ),
     tools=[
+        search_doctors_tool,
+        check_availability_tool,
         book_appointment_tool,
         cancel_appointment_tool,
-        reschedule_appointment_tool,
-        check_availability_tool
+        reschedule_appointment_tool
     ]
 )
 
@@ -192,6 +233,13 @@ class AppointmentAgent:
                 if len(target_time.split(":")[0]) == 1:
                     target_time = f"0{target_time}"
 
+            tool_results["booking_intent"] = {
+                "show_booking_widget": True,
+                "doctor_id": doc_id,
+                "specialty": specialty,
+                "target_date": target_date
+            }
+
             if doc_id and target_date and target_time:
                 tools_called.append("book_appointment")
                 reason = "Consultation"
@@ -274,6 +322,31 @@ class AppointmentAgent:
                     "tool_results": tool_results,
                     "response": msg
                 }
+
+            # If target_date is mentioned (e.g. 'tomorrow') but no doctor or specialty
+            if target_date:
+                return {
+                    "agent": self.name,
+                    "tools_called": tools_called,
+                    "tool_results": tool_results,
+                    "response": (
+                        f"I'd be happy to help you book an appointment for **{target_date}**!\n\n"
+                        "Which doctor or medical specialty (such as Cardiology, Neurology, Pediatrics, Orthopedics, or General Medicine) would you like to see?"
+                    )
+                }
+
+            return {
+                "agent": self.name,
+                "tools_called": tools_called,
+                "tool_results": tool_results,
+                "response": (
+                    "I would be glad to help you schedule an appointment! "
+                    "Could you please let me know:\n\n"
+                    "1. **Doctor or Medical Specialty** (e.g. Cardiology, General Medicine, Pediatrics, etc.)\n"
+                    "2. **Preferred Date** (e.g. tomorrow or YYYY-MM-DD)\n\n"
+                    "Once you share that, I will check real-time availability and let you pick your preferred time slot."
+                )
+            }
 
         return {
             "agent": self.name,
