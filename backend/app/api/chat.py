@@ -15,7 +15,7 @@ def get_memory_status():
 
 
 @router.get("/history/{session_id}")
-def get_session_history(session_id: str, limit: int = Query(10, ge=1, le=50)):
+def get_session_history(session_id: str, limit: int = Query(50, ge=1, le=200)):
     """
     Retrieves recent conversation turns for a session from the short-term cache / database.
     """

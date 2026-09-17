@@ -149,6 +149,20 @@ class SessionMemoryManager:
                 del self._in_memory_timestamps[session_id]
             cleared = True
 
+        # Clean up database records for this session
+        db = SessionLocal()
+        try:
+            conv = db.query(Conversation).filter(Conversation.session_id == session_id).first()
+            if conv:
+                db.query(MemoryRecord).filter(MemoryRecord.conversation_id == conv.id).delete()
+                db.delete(conv)
+                db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"MemoryManager DB clear error: {e}")
+        finally:
+            db.close()
+
         return cleared
 
     def acquire_lock(self, lock_name: str, timeout: float = 5.0) -> bool:

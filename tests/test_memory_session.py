@@ -52,8 +52,8 @@ def test_clear_session():
     assert cleared is True
     # After clearing active memory cache, fast history for this session is empty
     fresh_history = memory_manager.get_history(test_session, limit=10)
-    # Note: DB still retains for audit, but cache is flushed
     assert isinstance(fresh_history, list)
+    assert len(fresh_history) == 0
 
 
 def test_context_window_formatting():

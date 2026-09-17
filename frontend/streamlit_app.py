@@ -94,25 +94,51 @@ st.markdown("""
 
 API_BASE = "http://127.0.0.1:8000/api/v1"
 
-# Session State Initialization
+DEFAULT_WELCOME_MESSAGE = {
+    "role": "assistant",
+    "agent": "Root Supervisor",
+    "is_emergency": False,
+    "content": (
+        "👋 Hello! I am your **HopeCare Hospital AI Assistant**.\n\n"
+        "I can help you:\n"
+        "- 🏥 Check hospital timings, visiting hours, and accepted insurance\n"
+        "- 🩺 Search doctors by department or specialty\n"
+        "- 📅 Check real-time slots, book, reschedule, or cancel appointments\n"
+        "- 👤 View your medical records and profile\n"
+        "- 🚨 Provide urgent emergency guidance if you have acute symptoms\n\n"
+        "How may I assist you today?"
+    )
+}
+
+def load_persisted_chat_history(session_id: str = "streamlit-session") -> list:
+    """
+    Restores the active conversation from the backend memory/database.
+    Allows continuing the conversation seamlessly across browser refreshes.
+    """
+    history = [DEFAULT_WELCOME_MESSAGE]
+    try:
+        r = requests.get(f"{API_BASE}/chat/history/{session_id}?limit=100", timeout=3)
+        if r.status_code == 200:
+            data = r.json()
+            raw_turns = data.get("history", [])
+            if raw_turns:
+                for turn in raw_turns:
+                    role = "user" if turn.get("role") == "user" else "assistant"
+                    agent_name = turn.get("agent_name") or "Root Supervisor"
+                    is_emerg = "emergency" in str(agent_name).lower()
+                    history.append({
+                        "role": role,
+                        "agent": agent_name if role == "assistant" else None,
+                        "is_emergency": is_emerg,
+                        "content": turn.get("content", "")
+                    })
+    except Exception:
+        pass
+    return history
+
+# Session State Initialization (Auto-restores on page refresh)
 if "chat_history" not in st.session_state:
-    st.session_state.chat_history = [
-        {
-            "role": "assistant",
-            "agent": "Root Supervisor",
-            "is_emergency": False,
-            "content": (
-                "👋 Hello! I am your **HopeCare Hospital AI Assistant**.\n\n"
-                "I can help you:\n"
-                "- 🏥 Check hospital timings, visiting hours, and accepted insurance\n"
-                "- 🩺 Search doctors by department or specialty\n"
-                "- 📅 Check real-time slots, book, reschedule, or cancel appointments\n"
-                "- 👤 View your medical records and profile\n"
-                "- 🚨 Provide urgent emergency guidance if you have acute symptoms\n\n"
-                "How may I assist you today?"
-            )
-        }
-    ]
+    st.session_state.chat_history = load_persisted_chat_history("streamlit-session")
 
 # Helper to fetch patients
 def get_patients():
