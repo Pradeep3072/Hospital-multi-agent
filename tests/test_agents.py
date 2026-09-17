@@ -1,4 +1,41 @@
-from backend.app.agents.root_agent import root_supervisor
+from google.adk import Agent, Runner
+from backend.app.agents.root_agent import root_supervisor, adk_root_agent, adk_runner
+from backend.app.agents.emergency_agent import emergency_agent
+from backend.app.agents.appointment_agent import appointment_agent
+from backend.app.agents.doctor_agent import doctor_agent
+from backend.app.agents.patient_agent import patient_agent
+from backend.app.agents.hospital_agent import hospital_agent
+from backend.app.agents.medical_agent import medical_agent
+
+
+def test_google_adk_agent_hierarchy():
+    """Verify Google ADK Agent instances and sub-agent hierarchy."""
+    assert isinstance(adk_root_agent, Agent)
+    assert adk_root_agent.name == "root_supervisor"
+    
+    sub_agent_names = [a.name for a in adk_root_agent.sub_agents]
+    assert "emergency_agent" in sub_agent_names
+    assert "appointment_agent" in sub_agent_names
+    assert "doctor_agent" in sub_agent_names
+    assert "patient_agent" in sub_agent_names
+    assert "hospital_agent" in sub_agent_names
+    assert "medical_agent" in sub_agent_names
+
+
+def test_google_adk_runner_setup():
+    """Verify Google ADK Runner instance."""
+    assert isinstance(adk_runner, Runner)
+    assert adk_runner.agent.name == "root_supervisor"
+
+
+def test_google_adk_tools_registered():
+    """Verify that Google ADK Agent tools are properly attached."""
+    assert len(emergency_agent.tools) >= 1
+    assert len(appointment_agent.tools) >= 3
+    assert len(doctor_agent.tools) >= 3
+    assert len(patient_agent.tools) >= 3
+    assert len(hospital_agent.tools) >= 3
+    assert len(medical_agent.tools) >= 1
 
 
 def test_routing_hospital_agent():
@@ -17,3 +54,9 @@ def test_routing_patient_agent():
     res = root_supervisor.execute_workflow("What are my active prescriptions?", {"patient_id": 1})
     assert res["delegated_agent"] == "Patient Agent"
     assert "Lisinopril" in res["response"]
+
+
+def test_routing_appointment_agent():
+    res = root_supervisor.execute_workflow("I want to book an appointment with Dr. Mitchell", {"patient_id": 1})
+    assert res["delegated_agent"] == "Appointment Agent"
+    assert "slot" in res["response"].lower() or "mitchell" in res["response"].lower() or "appointment" in res["response"].lower()

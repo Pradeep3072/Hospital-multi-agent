@@ -1,7 +1,7 @@
 import datetime
 from backend.app.database.session import SessionLocal, init_db
 from backend.app.database.models import (
-    Role, User, Department, DoctorSpecialization, Doctor,
+    Role, Department, DoctorSpecialization, Doctor,
     DoctorSchedule, DoctorLeave, Patient, Appointment,
     MedicalRecord, Prescription, HospitalService, InsuranceProvider
 )
@@ -50,7 +50,7 @@ def seed_database():
     db.add_all([spec_cardio, spec_neuro, spec_peds, spec_ortho, spec_internist])
     db.commit()
 
-    # 4. Doctors (User + Doctor)
+    # 4. Doctors
     doctors_info = [
         {
             "name": "Dr. Sarah Mitchell",
@@ -111,25 +111,18 @@ def seed_database():
 
     created_doctors = []
     for doc in doctors_info:
-        user = User(
-            role_id=roles["doctor"].id,
-            email=doc["email"],
-            hashed_password="mock_password_hash",
-            full_name=doc["name"],
-            phone_number=doc["phone"],
-            is_active=True
-        )
-        db.add(user)
-        db.flush()
-
         doctor = Doctor(
-            user_id=user.id,
+            role_id=roles["doctor"].id,
             department_id=doc["dept"].id,
             specialization_id=doc["spec"].id,
+            full_name=doc["name"],
+            email=doc["email"],
+            phone_number=doc["phone"],
             license_number=doc["license"],
             consultation_fee=doc["fee"],
             experience_years=doc["exp"],
-            bio=doc["bio"]
+            bio=doc["bio"],
+            is_active=True
         )
         db.add(doctor)
         db.flush()
@@ -149,7 +142,7 @@ def seed_database():
 
     db.commit()
 
-    # 5. Patients (User + Patient)
+    # 5. Patients
     patients_data = [
         {
             "name": "John Doe",
@@ -191,19 +184,11 @@ def seed_database():
 
     created_patients = []
     for p in patients_data:
-        user = User(
-            role_id=roles["patient"].id,
-            email=p["email"],
-            hashed_password="mock_password_hash",
-            full_name=p["name"],
-            phone_number=p["phone"],
-            is_active=True
-        )
-        db.add(user)
-        db.flush()
-
         patient = Patient(
-            user_id=user.id,
+            role_id=roles["patient"].id,
+            full_name=p["name"],
+            email=p["email"],
+            phone_number=p["phone"],
             date_of_birth=p["dob"],
             gender=p["gender"],
             blood_group=p["blood"],

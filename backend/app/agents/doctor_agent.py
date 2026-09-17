@@ -1,14 +1,68 @@
 import json
 import re
 import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from google.adk import Agent
 from backend.app.tools.doctor_tools import search_doctors, get_doctor_details, get_available_slots
-from backend.app.config import settings
+from backend.app.config import settings, get_gemini_client
+
+
+# Google ADK Tools for Doctor Agent
+def search_doctors_tool(query: str = "", specialty: str = "") -> Dict[str, Any]:
+    """
+    Search doctors by physician name, bio keywords, or medical specialization.
+    
+    Args:
+        query: Physician name or free-text query (e.g. 'Mitchell', 'surgery').
+        specialty: Medical specialty filter (e.g. 'Cardiology', 'Orthopedics', 'Pediatrics', 'Neurology').
+    """
+    return search_doctors(query=query if query else None, specialty=specialty if specialty else None)
+
+
+def get_doctor_details_tool(doctor_id: int) -> Dict[str, Any]:
+    """
+    Retrieves detailed clinical profile, experience, room number, and consultation fee for a specific doctor.
+    
+    Args:
+        doctor_id: Numeric ID of the doctor (e.g. 1, 2, 3, 4).
+    """
+    return get_doctor_details(doctor_id=doctor_id)
+
+
+def get_available_slots_tool(doctor_id: int, date_str: str) -> Dict[str, Any]:
+    """
+    Retrieves available appointment consultation slots for a doctor on a given date.
+    
+    Args:
+        doctor_id: Numeric ID of the doctor.
+        date_str: Date in YYYY-MM-DD format (e.g. 2026-04-10).
+    """
+    return get_available_slots(doctor_id=doctor_id, date_str=date_str)
+
+
+# Google ADK Doctor Agent
+doctor_agent = Agent(
+    name="doctor_agent",
+    model=settings.GEMINI_MODEL,
+    description="Discovers doctors by medical specialty, reviews doctor backgrounds, and retrieves consultation availability.",
+    instruction=(
+        "You are the Doctor Directory & Specialist Finder Agent for HopeCare General Hospital. "
+        "Help patients find physicians by medical specialty (Cardiology, Orthopedics, Neurology, Pediatrics, etc.), "
+        "look up doctor bios, fees, and retrieve available appointment slots using search_doctors_tool, "
+        "get_doctor_details_tool, and get_available_slots_tool."
+    ),
+    tools=[
+        search_doctors_tool,
+        get_doctor_details_tool,
+        get_available_slots_tool
+    ]
+)
 
 
 class DoctorAgent:
     name = "Doctor Agent"
     description = "Discovers doctors by medical specialty, reviews doctor backgrounds, and retrieves consultation availability."
+    adk_agent = doctor_agent
 
     def process(self, message: str, context: Dict[str, Any]) -> Dict[str, Any]:
         msg_lower = message.lower()
@@ -19,19 +73,21 @@ class DoctorAgent:
         date_match = re.search(r"\b(202\d-\d{2}-\d{2})\b", message)
         doc_id_match = re.search(r"\bdoctor\s*(\d+)\b|\bdr\.?\s*(\d+)\b", msg_lower)
         
-        # Check for doctor name mentions
         doctor_id = None
         if doc_id_match:
             doctor_id = int(doc_id_match.group(1) or doc_id_match.group(2))
+        else:
+            for name_sub, d_id in [("mitchell", 1), ("chen", 2), ("vance", 3), ("wilson", 4), ("patel", 5)]:
+                if name_sub in msg_lower:
+                    doctor_id = d_id
+                    break
 
-        # Check for specialty keywords
         specialty = None
-        for spec in ["cardiologist", "cardiology", "neurologist", "neurology", "pediatrician", "pediatrics", "orthopedic", "orthopedics", "internal medicine", "general"]:
+        for spec in ["cardiologist", "cardiology", "cardio", "neurologist", "neurology", "neuro", "pediatrician", "pediatrics", "pedia", "orthopedic", "orthopedics", "ortho", "internal medicine", "general medicine", "general"]:
             if spec in msg_lower:
                 specialty = spec
                 break
 
-        # If date is mentioned or slot query
         if ("slot" in msg_lower or "availability" in msg_lower or "available" in msg_lower or "free" in msg_lower) and (date_match or "tomorrow" in msg_lower or "today" in msg_lower):
             target_date_str = None
             if date_match:
@@ -42,30 +98,36 @@ class DoctorAgent:
             else:
                 target_date_str = str(datetime.date.today())
 
-            target_doc_id = doctor_id or 1 # Default to 1 if not specified
+            target_doc_id = doctor_id or 1
             tools_called.append("get_available_slots")
             tool_results["slots"] = get_available_slots(target_doc_id, target_date_str)
             tools_called.append("get_doctor_details")
-            tool_results["doctor"] = get_doctor_details(target_doc_id)
+            doc_d = get_doctor_details(target_doc_id)
+            tool_results["doctor"] = doc_d
+            if doc_d.get("doctor"):
+                tool_results["auto_select_doctor"] = doc_d["doctor"]
+                tool_results["doctors"] = [doc_d["doctor"]]
 
         else:
-            # Doctor discovery / search
+            # Doctor search by specialty or query
             tools_called.append("search_doctors")
-            tool_results["search"] = search_doctors(query=message if not specialty else None, specialty=specialty)
+            tool_results["doctors"] = search_doctors(
+                query=None if specialty else message,
+                specialty=specialty
+            )
+            docs = tool_results["doctors"].get("doctors", [])
+            if docs:
+                tool_results["auto_select_doctor"] = docs[0]
 
-        # Gemini LLM synthesis if key present
-        if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "your-gemini-api-key-here":
+        client = get_gemini_client()
+        if client:
             try:
-                from google import genai
-                client = genai.Client(api_key=settings.GEMINI_API_KEY)
-                history_text = context.get("history_text", "")
-                history_section = f"Recent Conversation History:\n{history_text}\n\n" if history_text else ""
                 prompt = (
-                    f"You are the Doctor Discovery Specialist for HopeCare General Hospital.\n"
-                    f"{history_section}"
-                    f"Doctor Data Retrieved:\n{json.dumps(tool_results, indent=2)}\n\n"
+                    f"You are the Doctor Specialist Agent for HopeCare General Hospital.\n"
+                    f"Relevant Physician Data:\n{json.dumps(tool_results, indent=2)}\n\n"
                     f"User Query: {message}\n"
-                    f"Present the matching doctors, specialties, consultation fees, and available time slots clearly."
+                    f"Provide an informative, welcoming recommendation detailing the doctor's name, specialization, "
+                    f"consultation fee, room, and how the patient can book an appointment."
                 )
                 response = client.models.generate_content(
                     model=settings.GEMINI_MODEL,
@@ -83,29 +145,36 @@ class DoctorAgent:
         # Deterministic formatting fallback
         output = []
         if "slots" in tool_results:
-            slots_info = tool_results["slots"]
-            doc_name = tool_results.get("doctor", {}).get("doctor", {}).get("name", f"Doctor #{slots_info.get('doctor_id')}")
-            slots = slots_info.get("slots", [])
-            output.append(f"### Available Consultation Slots for {doc_name}\n**Date**: {slots_info.get('date')} ({slots_info.get('day_of_week')})\n")
+            slots_data = tool_results["slots"]
+            doc_name = tool_results.get("doctor", {}).get("doctor", {}).get("name", f"Doctor #{slots_data.get('doctor_id')}")
+            slots = slots_data.get("slots", [])
             if slots:
-                output.append(f"We have **{len(slots)} open slots** available:\n`" + "`, `".join(slots) + "`\n\nTo book a slot, tell me: *\"Book appointment with Doctor {doc_name} on {slots_info.get('date')} at [TIME]\"*.")
+                slot_txt = ", ".join([f"`{s}`" for s in slots[:8]])
+                output.append(
+                    f"### Available Consultation Slots\n"
+                    f"**Doctor**: Dr. {doc_name}\n"
+                    f"**Date**: {slots_data.get('date')}\n\n"
+                    f"Open slots: {slot_txt}\n\n"
+                    f"Would you like to book one of these slots?"
+                )
             else:
-                output.append("No open consultation slots remaining on this date. Please try another weekday.")
+                output.append(f"No available slots found for Dr. {doc_name} on {slots_data.get('date')}. Please select another date.")
 
-        elif "search" in tool_results:
-            docs = tool_results["search"].get("doctors", [])
-            if docs:
-                output.append(f"### Found {len(docs)} Matching Doctor(s) at HopeCare:")
-                for d in docs:
+        elif "doctors" in tool_results:
+            doc_list = tool_results["doctors"].get("doctors", [])
+            if doc_list:
+                output.append("### Recommended Specialists\n")
+                for d in doc_list:
+                    room = f" | **Room**: {d['room_number']}" if d.get('room_number') else ""
                     output.append(
-                        f"- **{d['name']}** (Doctor ID: `{d['id']}`)\n"
-                        f"  *Department*: {d['department']} | *Specialty*: {d['specialization']}\n"
-                        f"  *Experience*: {d['experience_years']} yrs | *Fee*: ${d['consultation_fee']:.2f}\n"
-                        f"  *Bio*: {d['bio']}\n"
+                        f"- **Dr. {d.get('name', 'Specialist')}** — *{d.get('specialization', 'General')}*\n"
+                        f"  - **Experience**: {d.get('experience_years', 5)} years{room}\n"
+                        f"  - **Consultation Fee**: ${d.get('consultation_fee', 100.0):.2f}\n"
+                        f"  - **Bio**: {d.get('bio', '')}\n"
                     )
-                output.append("To view available slots, ask: *\"Show available slots for Doctor [ID] on [YYYY-MM-DD]\"*.")
+                output.append("Reply with *Book appointment with Dr. [Name]* to schedule your visit.")
             else:
-                output.append("No doctors found matching your criteria. Our departments include Cardiology, Neurology, Pediatrics, Orthopedics, and General Medicine.")
+                output.append("No doctors found matching your query. Please try searching for a different specialty like Cardiology, Orthopedics, or Neurology.")
 
         return {
             "agent": self.name,

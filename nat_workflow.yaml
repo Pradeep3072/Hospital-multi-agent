@@ -1,0 +1,32 @@
+# NVIDIA NeMo Agent Toolkit (nvidia-nat) Workflow Configuration
+# HopeCare Hospital Multi-Agent System
+
+general:
+  enable_per_user_monitoring: true
+
+llms:
+  clinical_llm:
+    type: openai
+    model_name: gemini-2.5-flash
+
+eval:
+  general:
+    max_concurrency: 4
+    profiler:
+      base_metrics: true
+      token_usage_forecast: true
+      workflow_runtime_forecast: true
+      compute_llm_metrics: true
+      bottleneck_analysis:
+        enable_simple_stack: true
+        enable_nested_stack: true
+      concurrency_spike_analysis:
+        enable: true
+        spike_threshold: 2
+      prediction_trie:
+        enable: true
+        output_filename: prediction_trie.json
+
+workflow:
+  type: chat_completion
+  llm_name: clinical_llm

@@ -26,7 +26,8 @@ def book_appointment(req: BookAppointmentRequest, db: Session = Depends(get_db))
             doctor_id=req.doctor_id,
             appointment_date=appt_date,
             appointment_time=appt_time,
-            reason_for_visit=req.reason
+            reason_for_visit=req.reason,
+            patient_name=req.patient_name
         )
     except SlotConflictError as e:
         raise HTTPException(status_code=409, detail=str(e))

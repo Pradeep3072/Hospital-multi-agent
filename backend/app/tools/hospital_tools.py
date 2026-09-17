@@ -3,8 +3,10 @@ from sqlalchemy.orm import Session
 from backend.app.rag.retriever import rag_retriever
 from backend.app.database.session import SessionLocal
 from backend.app.database.models import Department, HospitalService, InsuranceProvider
+from backend.app.profiling.profiler import agent_profiler
 
 
+@agent_profiler.track_tool("search_hospital_knowledge")
 def search_hospital_knowledge(query: str, top_k: int = 3) -> Dict[str, Any]:
     """
     Search hospital knowledge base (visiting hours, rules, policies, guides) using hybrid RAG.
@@ -25,6 +27,7 @@ def search_hospital_knowledge(query: str, top_k: int = 3) -> Dict[str, Any]:
     }
 
 
+@agent_profiler.track_tool("get_department")
 def get_department(department_name: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Get information about hospital departments, locations, and contact info.
@@ -50,6 +53,7 @@ def get_department(department_name: Optional[str] = None) -> List[Dict[str, Any]
         db.close()
 
 
+@agent_profiler.track_tool("get_hospital_service")
 def get_hospital_service(service_name: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Look up hospital medical services, pricing, and availability hours.
@@ -75,6 +79,7 @@ def get_hospital_service(service_name: Optional[str] = None) -> List[Dict[str, A
         db.close()
 
 
+@agent_profiler.track_tool("get_accepted_insurances")
 def get_accepted_insurances() -> List[Dict[str, Any]]:
     """
     List all insurance providers accepted by the hospital.

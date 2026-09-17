@@ -22,19 +22,8 @@ class EmbeddingModel:
         return np.array([self._embed_single(t) for t in texts])
 
     def _embed_single(self, text: str) -> np.ndarray:
-        if self.gemini_client:
-            try:
-                # Use text-embedding-004 via Google GenAI client
-                result = self.gemini_client.models.embed_content(
-                    model="text-embedding-004",
-                    contents=text
-                )
-                vec = np.array(result.embedding.values, dtype=np.float32)
-                norm = np.linalg.norm(vec)
-                return vec / (norm + 1e-9)
-            except Exception as e:
-                # Fallback on any API failure
-                pass
+        # High-speed deterministic local dense feature projection (dimension 384)
+        # Guarantees zero latency and eliminates 404/retry network overhead for hybrid RAG.
         
         # High quality deterministic local dense feature projection (dimension 384)
         dim = 384

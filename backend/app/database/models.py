@@ -15,24 +15,8 @@ class Role(Base):
     name = Column(String(50), unique=True, nullable=False) # admin, doctor, patient, staff
     description = Column(String(255), nullable=True)
 
-    users = relationship("User", back_populates="role")
-
-
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
-    email = Column(String(120), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
-    full_name = Column(String(100), nullable=False)
-    phone_number = Column(String(30), nullable=True)
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-
-    role = relationship("Role", back_populates="users")
-    patient = relationship("Patient", back_populates="user", uselist=False)
-    doctor = relationship("Doctor", back_populates="user", uselist=False)
-    audit_logs = relationship("AuditLog", back_populates="user")
+    doctors = relationship("Doctor", back_populates="role")
+    patients = relationship("Patient", back_populates="role")
 
 
 class Department(Base):
@@ -60,15 +44,19 @@ class DoctorSpecialization(Base):
 class Doctor(Base):
     __tablename__ = "doctors"
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=True)
     department_id = Column(Integer, ForeignKey("departments.id"), nullable=False)
     specialization_id = Column(Integer, ForeignKey("doctor_specializations.id"), nullable=False)
+    full_name = Column(String(100), nullable=False)
+    email = Column(String(120), unique=True, index=True, nullable=True)
+    phone_number = Column(String(30), nullable=True)
     license_number = Column(String(50), unique=True, nullable=False)
     consultation_fee = Column(Float, default=50.0)
     experience_years = Column(Integer, default=5)
     bio = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
 
-    user = relationship("User", back_populates="doctor")
+    role = relationship("Role", back_populates="doctors")
     department = relationship("Department", back_populates="doctors")
     specialization = relationship("DoctorSpecialization", back_populates="doctors")
     schedules = relationship("DoctorSchedule", back_populates="doctor")
@@ -102,7 +90,10 @@ class DoctorLeave(Base):
 class Patient(Base):
     __tablename__ = "patients"
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=True)
+    full_name = Column(String(100), nullable=False)
+    email = Column(String(120), unique=True, index=True, nullable=True)
+    phone_number = Column(String(30), nullable=True)
     date_of_birth = Column(Date, nullable=False)
     gender = Column(String(20), nullable=False)
     blood_group = Column(String(10), nullable=True)
@@ -111,7 +102,7 @@ class Patient(Base):
     address = Column(String(255), nullable=True)
     insurance_policy_number = Column(String(100), nullable=True)
 
-    user = relationship("User", back_populates="patient")
+    role = relationship("Role", back_populates="patients")
     appointments = relationship("Appointment", back_populates="patient")
     medical_records = relationship("MedicalRecord", back_populates="patient")
     prescriptions = relationship("Prescription", back_populates="patient")
@@ -188,18 +179,6 @@ class InsuranceProvider(Base):
     claims_email = Column(String(100), nullable=True)
 
 
-class Notification(Base):
-    __tablename__ = "notifications"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    channel = Column(String(30), default="email") # email, sms, push
-    recipient = Column(String(120), nullable=False)
-    subject = Column(String(200), nullable=True)
-    message = Column(Text, nullable=False)
-    status = Column(String(30), default="SENT") # PENDING, SENT, FAILED
-    sent_at = Column(DateTime, default=datetime.datetime.utcnow)
-
-
 class Conversation(Base):
     __tablename__ = "conversations"
     id = Column(Integer, primary_key=True, index=True)
@@ -226,11 +205,9 @@ class MemoryRecord(Base):
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    patient_id = Column(Integer, ForeignKey("patients.id"), nullable=True)
     action = Column(String(100), nullable=False) # READ, WRITE, BOOK_APPOINTMENT, CANCEL_APPOINTMENT, etc.
     resource = Column(String(100), nullable=False)
     details = Column(Text, nullable=True)
     ip_address = Column(String(50), nullable=True)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
-
-    user = relationship("User", back_populates="audit_logs")

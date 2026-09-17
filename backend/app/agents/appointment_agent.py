@@ -1,17 +1,111 @@
 import json
 import re
 import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+from google.adk import Agent
 from backend.app.tools.appointment_tools import (
     book_appointment, cancel_appointment, reschedule_appointment, check_availability
 )
-from backend.app.tools.doctor_tools import search_doctors
+from backend.app.tools.doctor_tools import search_doctors, get_doctor_details
 from backend.app.config import settings
+
+
+# Google ADK Tools for Appointment Agent
+def book_appointment_tool(
+    patient_id: int,
+    doctor_id: int,
+    date_str: str,
+    time_str: str,
+    reason: str = "Consultation"
+) -> Dict[str, Any]:
+    """
+    Transaction-safe booking tool. Books an appointment slot for a patient with a doctor.
+    
+    Args:
+        patient_id: The ID of the patient booking the appointment.
+        doctor_id: The ID of the doctor (e.g. 1 for Dr. Mitchell, 4 for Dr. Wilson).
+        date_str: The booking date in YYYY-MM-DD format (e.g. 2026-04-10).
+        time_str: The booking time in HH:MM format (e.g. 09:00, 10:30).
+        reason: The reason for visit or consultation topic.
+    """
+    return book_appointment(
+        patient_id=patient_id,
+        doctor_id=doctor_id,
+        date_str=date_str,
+        time_str=time_str,
+        reason=reason
+    )
+
+
+def cancel_appointment_tool(appointment_id: int, patient_id: int = 1) -> Dict[str, Any]:
+    """
+    Cancels an existing patient appointment by its appointment ID.
+    
+    Args:
+        appointment_id: Numeric ID of the appointment to cancel.
+        patient_id: ID of the patient requesting cancellation.
+    """
+    return cancel_appointment(appointment_id=appointment_id, patient_id=patient_id)
+
+
+def reschedule_appointment_tool(
+    appointment_id: int,
+    new_date_str: str,
+    new_time_str: str,
+    patient_id: int = 1
+) -> Dict[str, Any]:
+    """
+    Reschedules an existing appointment to a new date and time slot.
+    
+    Args:
+        appointment_id: Numeric ID of the appointment to reschedule.
+        new_date_str: The new appointment date in YYYY-MM-DD format.
+        new_time_str: The new appointment time in HH:MM format.
+        patient_id: ID of the patient.
+    """
+    return reschedule_appointment(
+        appointment_id=appointment_id,
+        new_date_str=new_date_str,
+        new_time_str=new_time_str,
+        patient_id=patient_id
+    )
+
+
+def check_availability_tool(doctor_id: int, date_str: str) -> Dict[str, Any]:
+    """
+    Checks the available appointment slots for a doctor on a specific date.
+    
+    Args:
+        doctor_id: The numeric ID of the doctor.
+        date_str: Date in YYYY-MM-DD format.
+    """
+    return check_availability(doctor_id=doctor_id, date_str=date_str)
+
+
+# Google ADK Appointment Agent
+appointment_agent = Agent(
+    name="appointment_agent",
+    model=settings.GEMINI_MODEL,
+    description="Executes transaction-safe appointment bookings, cancellations, and reschedulings.",
+    instruction=(
+        "You are the Appointment Booking Agent for HopeCare General Hospital. "
+        "You execute transaction-safe appointment operations using your provided tools: "
+        "book_appointment_tool, cancel_appointment_tool, reschedule_appointment_tool, and check_availability_tool. "
+        "When confirming a booking, clearly summarize the appointment ID, doctor, date, time, and reason."
+    ),
+    tools=[
+        book_appointment_tool,
+        cancel_appointment_tool,
+        reschedule_appointment_tool,
+        check_availability_tool
+    ]
+)
 
 
 class AppointmentAgent:
     name = "Appointment Agent"
     description = "Executes transaction-safe appointment bookings, cancellations, and reschedulings."
+    adk_agent = appointment_agent
 
     def process(self, message: str, context: Dict[str, Any]) -> Dict[str, Any]:
         patient_id = context.get("patient_id", 1)
@@ -69,34 +163,35 @@ class AppointmentAgent:
             }
 
         # 3. Check for Booking Intent
-        if "book" in msg_lower or "schedule" in msg_lower or "reserve" in msg_lower:
-            # Extract doctor ID or search by name
+        if any(w in msg_lower for w in ["book", "bok", "schedule", "reserve", "appointment", "consultation", "slot", "slots"]):
+            specialty = None
+            for spec in ["cardiology", "cardiologist", "cardio", "neurology", "neurologist", "neuro", "pediatrics", "pediatrician", "pedia", "orthopedics", "orthopedic", "ortho", "general medicine", "internal medicine", "physician"]:
+                if spec in msg_lower:
+                    specialty = spec
+                    break
+
             doc_id = None
             doc_match = re.search(r"(?:doctor\s*|dr\.?\s*)#?(\d+)", msg_lower)
             if doc_match:
                 doc_id = int(doc_match.group(1))
             else:
-                # Check doctor names
                 for name_sub, d_id in [("mitchell", 1), ("chen", 2), ("vance", 3), ("wilson", 4), ("patel", 5)]:
                     if name_sub in msg_lower:
                         doc_id = d_id
                         break
 
-            # Date extraction
             target_date = None
             if date_match:
                 target_date = date_match.group(1)
             elif "tomorrow" in msg_lower:
                 target_date = str(datetime.date.today() + datetime.timedelta(days=1))
             
-            # Time extraction
             target_time = None
             if time_match:
                 target_time = time_match.group(1)
                 if len(target_time.split(":")[0]) == 1:
                     target_time = f"0{target_time}"
 
-            # If we have all required booking information
             if doc_id and target_date and target_time:
                 tools_called.append("book_appointment")
                 reason = "Consultation"
@@ -135,45 +230,57 @@ class AppointmentAgent:
                     "response": msg
                 }
 
-            elif doc_id and target_date:
-                # We have doctor and date, but need slot selection!
+            # Doctor specified, but no time yet: Check availability
+            if doc_id:
+                t_date = target_date or str(datetime.date.today() + datetime.timedelta(days=1))
                 tools_called.append("check_availability")
-                slots_data = check_availability(doc_id, target_date)
-                tool_results["availability"] = slots_data
-                slots = slots_data.get("slots", [])
+                tool_results["availability"] = check_availability(doc_id, t_date)
+                slots = tool_results["availability"].get("slots", [])
+                
                 if slots:
+                    slot_txt = ", ".join([f"`{s}`" for s in slots[:6]])
                     msg = (
-                        f"Here are the available slots for Doctor #{doc_id} on **{target_date}**:\n\n"
-                        f"`" + "`, `".join(slots) + "`\n\n"
-                        f"Which time would you like to book? For example, reply:\n"
-                        f"*\"Book with Doctor {doc_id} on {target_date} at {slots[0]}\"*"
+                        f"📅 **Available slots for Dr. #{doc_id} on {t_date}**:\n\n"
+                        f"{slot_txt}\n\n"
+                        f"Reply with your chosen time (e.g. *Book Dr. {doc_id} on {t_date} at {slots[0]}*) to confirm your reservation."
                     )
                 else:
-                    msg = f"There are no available slots for Doctor #{doc_id} on {target_date}. Please choose another weekday."
+                    msg = f"No open slots found for Dr. #{doc_id} on {t_date}. Please select another date or doctor."
+                
                 return {
                     "agent": self.name,
                     "tools_called": tools_called,
                     "tool_results": tool_results,
                     "response": msg
                 }
-            else:
+
+            # If specialty is mentioned, search doctors
+            if specialty:
+                tools_called.append("search_doctors")
+                tool_results["doctors"] = search_doctors(specialty=specialty)
+                docs = tool_results["doctors"].get("doctors", [])
+                if docs:
+                    doc_list = "\n".join([f"- **Dr. {d['name']}** ({d['specialization']}) — Fee: ${d['consultation_fee']:.2f} (ID: #{d['doctor_id']})" for d in docs])
+                    msg = (
+                        f"Here are our available {specialty.capitalize()} specialists:\n\n{doc_list}\n\n"
+                        f"Which doctor and date would you prefer?"
+                    )
+                else:
+                    msg = f"We couldn't find an available specialist in {specialty}. Please contact hospital reception."
+                
                 return {
                     "agent": self.name,
                     "tools_called": tools_called,
                     "tool_results": tool_results,
-                    "response": (
-                        "To book an appointment, please provide:\n"
-                        "1. Doctor Name or Specialty (e.g., Dr. Mitchell, Cardiologist)\n"
-                        "2. Preferred Date (YYYY-MM-DD)\n"
-                        "3. Preferred Time Slot (e.g. 10:00)\n\n"
-                        "Example: *\"Book appointment with Dr. Mitchell on 2026-09-17 at 10:30\"*"
-                    )
+                    "response": msg
                 }
 
-        # Default query handler
         return {
             "agent": self.name,
-            "tools_called": [],
-            "tool_results": {},
-            "response": "I can help you book, reschedule, or cancel hospital appointments. What would you like to do?"
+            "tools_called": tools_called,
+            "tool_results": tool_results,
+            "response": (
+                "I can help you schedule, reschedule, or cancel your appointment.\n"
+                "Please tell me the doctor's name or specialty, preferred date (YYYY-MM-DD), and time."
+            )
         }

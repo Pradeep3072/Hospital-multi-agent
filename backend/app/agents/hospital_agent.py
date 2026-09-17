@@ -1,14 +1,74 @@
 import json
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
+from google.adk import Agent
 from backend.app.tools.hospital_tools import (
     search_hospital_knowledge, get_department, get_hospital_service, get_accepted_insurances
 )
-from backend.app.config import settings
+from backend.app.config import settings, get_gemini_client
+
+
+# Google ADK Tools for Hospital Agent
+def search_hospital_knowledge_tool(query: str) -> Dict[str, Any]:
+    """
+    Search the hospital knowledge base (visiting hours, policies, cafeteria, parking, guidelines) using hybrid RAG.
+    
+    Args:
+        query: Questions about hospital hours, amenities, visitor guidelines, or policies.
+    """
+    return search_hospital_knowledge(query=query)
+
+
+def get_department_tool(department_name: str = "") -> List[Dict[str, Any]]:
+    """
+    Look up hospital departments, building locations, floors, and extension phone numbers.
+    
+    Args:
+        department_name: Optional department name filter (e.g. 'Cardiology', 'Emergency', 'Pediatrics').
+    """
+    return get_department(department_name=department_name if department_name else None)
+
+
+def get_hospital_service_tool(service_name: str = "") -> List[Dict[str, Any]]:
+    """
+    Look up hospital diagnostic services, laboratory tests, scans (MRI, CT, X-Ray), and pricing.
+    
+    Args:
+        service_name: Optional service name filter (e.g. 'MRI', 'Blood', 'X-Ray').
+    """
+    return get_hospital_service(service_name=service_name if service_name else None)
+
+
+def get_accepted_insurances_tool() -> List[Dict[str, Any]]:
+    """
+    Retrieves the list of in-network and accepted insurance providers and copay policies.
+    """
+    return get_accepted_insurances()
+
+
+# Google ADK Hospital Agent
+hospital_agent = Agent(
+    name="hospital_agent",
+    model=settings.GEMINI_MODEL,
+    description="Answers questions about hospital visiting hours, facilities, departments, amenities, insurance networks, and guidelines.",
+    instruction=(
+        "You are the Hospital Information & Operations Agent for HopeCare General Hospital. "
+        "Answer patient questions about visiting hours, cafeteria, parking, directions, departments, services, "
+        "and accepted health insurance networks using search_hospital_knowledge_tool, get_department_tool, "
+        "get_hospital_service_tool, and get_accepted_insurances_tool. Ground your responses accurately in hospital data."
+    ),
+    tools=[
+        search_hospital_knowledge_tool,
+        get_department_tool,
+        get_hospital_service_tool,
+        get_accepted_insurances_tool
+    ]
+)
 
 
 class HospitalAgent:
     name = "Hospital Agent"
     description = "Answers questions about hospital visiting hours, facilities, departments, amenities, insurance networks, and guidelines."
+    adk_agent = hospital_agent
 
     def process(self, message: str, context: Dict[str, Any]) -> Dict[str, Any]:
         msg_lower = message.lower()
@@ -33,12 +93,10 @@ class HospitalAgent:
             tools_called.append("search_hospital_knowledge")
             tool_results["rag"] = search_hospital_knowledge(message)
 
-        # Synthesize grounded answer
-        # If Gemini API key is configured, invoke Gemini with grounded tool context
-        if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "your-gemini-api-key-here":
+        # Synthesize grounded answer with Gemini LLM if available
+        client = get_gemini_client()
+        if client:
             try:
-                from google import genai
-                client = genai.Client(api_key=settings.GEMINI_API_KEY)
                 history_text = context.get("history_text", "")
                 history_section = f"Recent Conversation History:\n{history_text}\n\n" if history_text else ""
                 prompt = (

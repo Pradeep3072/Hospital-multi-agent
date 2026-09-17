@@ -35,6 +35,55 @@ A scalable, production-grade healthcare assistant built using **Google ADK multi
 
 ---
 
+## 🛠️ Technology Stack
+
+The system is built on a modern, decoupled healthcare AI architecture with the following technology stack:
+
+### 1. Frontend & User Interface
+- **[Streamlit](https://streamlit.io/) (`>=1.38.0`)**: High-performance interactive UI framework hosting the patient dashboard, real-time doctor slot picker, appointment management, and conversational multi-agent chat interface.
+- **Custom Theming & Vanilla CSS3**: Custom soothing healthcare light-green theme tokens (`#f0fdf4`, `#059669`, `#e6f4ea`), Google Font typography (*Inter*), responsive glassmorphic cards, emergency alert banners, and reactive agent identity badges.
+- **Requests & HTTPX**: Synchronous and asynchronous HTTP clients handling REST communication with the backend API gateway.
+
+### 2. Backend & API Gateway
+- **[FastAPI](https://fastapi.tiangolo.com/) (`>=0.115.0`)**: High-performance asynchronous web framework providing REST endpoints, audit logging, CORS middleware, and automated OpenAPI/Swagger documentation at `/docs`.
+- **[Uvicorn](https://www.uvicorn.org/) (`>=0.30.0`)**: Production-grade ASGI web server running FastAPI services.
+- **[Pydantic v2](https://docs.pydantic.dev/) (`>=2.8.0`) & `pydantic-settings` (`>=2.4.0`)**: Strict schema validation, DTO models, request serialization, and environment configuration management (`.env`).
+
+### 3. Multi-Agent AI & Orchestration
+- **Google ADK Multi-Agent Pattern**: Hierarchical Supervisor / Sub-Agent routing pattern coordinating 7 specialized clinical and operational agents:
+  - *Root Supervisor Agent* (intent routing, conversational memory synthesis)
+  - *Hospital Agent* (hours, departments, facilities, insurance policies)
+  - *Doctor Agent* (specialties, profiles, consulting fees, scheduling)
+  - *Appointment Agent* (ACID-safe booking, rescheduling, cancellation)
+  - *Patient Agent* (confidential patient records, profile details, appointments)
+  - *Medical Knowledge Agent* (approved patient education & post-care instructions)
+  - *Emergency Agent* (zero-latency heuristic & semantic emergency triage)
+- **[Google GenAI SDK](https://github.com/googleapis/python-genai) (`google-genai >= 1.0.0`)**: Integration with Google Gemini (`gemini-2.5-flash`) for multi-agent reasoning, augmented with an automatic deterministic offline reasoning fallback.
+
+### 4. Retrieval-Augmented Generation (RAG)
+- **Hybrid Search Pipeline**:
+  - **Dense Vector Search**: Semantic similarity matching across clinical guideline and hospital document embeddings.
+  - **Lexical Keyword Search**: **Rank-BM25** (`rank-bm25 >= 0.2.2`) Okapi BM25 ranking algorithm.
+  - **Reciprocal Rank Fusion (RRF)**: Merges vector distance and lexical scores to maximize retrieval precision.
+- **Curated Hospital Knowledge Base**: Markdown clinical guides, visitor policies, and department FAQs (`data/documents/`).
+
+### 5. Database, ORM & Concurrency Controls
+- **[SQLAlchemy 2.0](https://www.sqlalchemy.org/) (`>=2.0.30`)**: Modern Python Object Relational Mapper (ORM) powering a 16-table relational schema with ACID transaction isolation.
+- **PostgreSQL / pgvector (`psycopg2-binary >= 2.9.9`)**: Production-grade relational database with vector extension for embeddings.
+- **SQLite (Auto-Fallback)**: Built-in local fallback database enabling instantaneous zero-dependency local development and CI testing.
+- **ACID Concurrency Locking**: Database unique constraint `uix_doctor_datetime_slot` preventing double-booking race conditions during high-concurrency booking spikes.
+
+### 6. Session State, Memory & Caching
+- **[Redis](https://redis.io/) (`redis >= 5.0.0`)**: Distributed caching and session memory manager storing conversation turns (`session:{session_id}:messages`) and distributed locks.
+- **In-Memory LRU Cache Fallback**: Seamless local in-process fallback ensuring memory features work even without an active Redis instance.
+
+### 7. Testing, Containerization & Utilities
+- **[pytest](https://docs.pytest.org/) (`>=8.0.0`)**: Automated test suite with 22 unit and integration tests covering concurrency locks, emergency triage, RAG retrieval, agent routing, and REST endpoints.
+- **Docker & Docker Compose**: Multi-container containerization with `Dockerfile.backend`, `Dockerfile.frontend`, and `docker-compose.yml`.
+- **python-dateutil (`>=2.9.0`)**: Robust datetime manipulation for doctor shifts, leave calculations, and slot generation.
+
+---
+
 ## 🤖 Google ADK Multi-Agent Design
 
 The system employs a hierarchical supervisor multi-agent architecture:

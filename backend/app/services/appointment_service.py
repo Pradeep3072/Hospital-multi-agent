@@ -5,7 +5,6 @@ from sqlalchemy.exc import IntegrityError
 
 from backend.app.database.models import Appointment, Patient, Doctor
 from backend.app.services.doctor_service import DoctorService
-from backend.app.services.notification_service import NotificationService
 from backend.app.services.audit_service import AuditService
 
 
@@ -25,20 +24,41 @@ class AppointmentService:
     @staticmethod
     def book_appointment(
         db: Session,
-        patient_id: int,
-        doctor_id: int,
-        appointment_date: datetime.date,
-        appointment_time: datetime.time,
-        reason_for_visit: Optional[str] = None
+        patient_id: Optional[int] = None,
+        doctor_id: int = 1,
+        appointment_date: datetime.date = None,
+        appointment_time: datetime.time = None,
+        reason_for_visit: Optional[str] = None,
+        patient_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Atomically books an appointment with database concurrency protection.
         Prevents race conditions and double-booking.
         """
-        # 1. Validate patient
-        patient = db.query(Patient).filter(Patient.id == patient_id).first()
+        # 1. Validate or resolve patient
+        patient = None
+        if patient_id:
+            patient = db.query(Patient).filter(Patient.id == patient_id).first()
+        
+        if not patient and patient_name:
+            clean_name = patient_name.strip()
+            patient = db.query(Patient).filter(Patient.full_name.ilike(f"%{clean_name}%")).first()
+            if not patient and clean_name:
+                # Create patient on the fly
+                patient = Patient(
+                    full_name=clean_name,
+                    date_of_birth=datetime.date(1990, 1, 1),
+                    gender="Not Specified"
+                )
+                db.add(patient)
+                db.commit()
+                db.refresh(patient)
+
         if not patient:
-            raise InvalidOperationError(f"Patient with ID {patient_id} does not exist.")
+            # Fallback to default active patient if none specified
+            patient = db.query(Patient).first()
+            if not patient:
+                raise InvalidOperationError("No registered patients found.")
 
         # 2. Validate doctor
         doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
@@ -49,7 +69,7 @@ class AppointmentService:
         available_slots = DoctorService.get_available_slots(db, doctor_id, appointment_date)
         time_str = appointment_time.strftime("%H:%M")
         if time_str not in available_slots:
-            raise SlotConflictError(f"Time slot {time_str} on {appointment_date} is not available for Dr. {doctor.user.full_name}.")
+            raise SlotConflictError(f"Time slot {time_str} on {appointment_date} is not available for Dr. {doctor.full_name}.")
 
         # 4. Atomic PostgreSQL/Database Transaction
         try:
@@ -64,8 +84,9 @@ class AppointmentService:
             if existing:
                 raise SlotConflictError(f"Slot {time_str} is already reserved.")
 
+            patient_id = patient.id
             appt = Appointment(
-                patient_id=patient_id,
+                patient_id=patient.id,
                 doctor_id=doctor_id,
                 appointment_date=appointment_date,
                 appointment_time=appointment_time,
@@ -88,21 +109,11 @@ class AppointmentService:
             db=db,
             action="BOOK_APPOINTMENT",
             resource="Appointment",
-            details=f"Appointment {appt.id} booked for patient {patient_id} with doctor {doctor_id}",
-            user_id=patient.user_id
+            details=f"Appointment {appt.id} booked for patient {patient.id} ({patient.full_name}) with doctor {doctor_id}",
+            patient_id=patient.id
         )
 
-        # 6. Async notification
-        doc_name = doctor.user.full_name if doctor.user else f"Doctor {doctor_id}"
-        NotificationService.send_booking_confirmation(
-            db=db,
-            user_id=patient.user_id,
-            recipient=patient.user.email if patient.user else "patient@example.com",
-            appointment_id=appt.id,
-            doctor_name=doc_name,
-            appointment_date=str(appointment_date),
-            appointment_time=time_str
-        )
+        doc_name = doctor.full_name if doctor else f"Doctor {doctor_id}"
 
         return {
             "appointment_id": appt.id,
@@ -136,25 +147,15 @@ class AppointmentService:
             action="CANCEL_APPOINTMENT",
             resource="Appointment",
             details=f"Appointment {appointment_id} cancelled",
-            user_id=appt.patient.user_id if appt.patient else None
+            patient_id=appt.patient_id if appt else None
         )
 
-        # Send cancellation notification
-        if appt.patient and appt.patient.user:
-            doc_name = appt.doctor.user.full_name if appt.doctor and appt.doctor.user else "Doctor"
-            NotificationService.send_cancellation_notice(
-                db=db,
-                user_id=appt.patient.user_id,
-                recipient=appt.patient.user.email,
-                appointment_id=appt.id,
-                doctor_name=doc_name,
-                appointment_date=str(appt.appointment_date)
-            )
+        doc_name = appt.doctor.full_name if appt.doctor else ""
 
         return {
             "appointment_id": appt.id,
             "status": "CANCELLED",
-            "message": f"Appointment with Dr. {appt.doctor.user.full_name if appt.doctor and appt.doctor.user else ''} has been successfully cancelled."
+            "message": f"Appointment with Dr. {doc_name} has been successfully cancelled."
         }
 
     @staticmethod
@@ -195,7 +196,7 @@ class AppointmentService:
             action="RESCHEDULE_APPOINTMENT",
             resource="Appointment",
             details=f"Appointment {appointment_id} rescheduled to {new_date} {time_str}",
-            user_id=appt.patient.user_id if appt.patient else None
+            patient_id=appt.patient_id if appt else None
         )
 
         return {

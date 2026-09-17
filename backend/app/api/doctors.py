@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from backend.app.database.session import get_db
 from backend.app.services.doctor_service import DoctorService
+from backend.app.schemas.doctor import CreateDoctorRequest
 
 router = APIRouter(prefix="/doctors", tags=["Doctors"])
 
@@ -44,3 +45,18 @@ def get_doctor_available_slots(
         "day_of_week": target_date.strftime("%A"),
         "slots": slots
     }
+
+
+@router.post("", status_code=201)
+def create_doctor(req: CreateDoctorRequest, db: Session = Depends(get_db)):
+    try:
+        return DoctorService.create_doctor(
+            db=db,
+            name=req.name,
+            department_id=req.department_id,
+            department_name=req.department_name
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create doctor: {str(e)}")

@@ -28,3 +28,12 @@ def list_insurances():
 @router.post("/search")
 def search_knowledge(req: SearchRequest):
     return search_hospital_knowledge(req.query, top_k=req.top_k)
+
+
+@router.post("/reindex")
+def reindex_knowledge_base():
+    """
+    Trigger dynamic reload and re-indexing of all documents in data/documents (PDFs, Markdown, text).
+    """
+    from backend.app.rag.retriever import rag_retriever
+    return rag_retriever.reindex()

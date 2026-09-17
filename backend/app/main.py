@@ -10,6 +10,8 @@ from backend.app.api.patients import router as patients_router
 from backend.app.api.doctors import router as doctors_router
 from backend.app.api.appointments import router as appointments_router
 from backend.app.api.hospital import router as hospital_router
+from backend.app.api.profiles import router as profiles_router
+from backend.app.api.profiler import router as profiler_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -32,6 +34,8 @@ app.include_router(patients_router, prefix="/api/v1")
 app.include_router(doctors_router, prefix="/api/v1")
 app.include_router(appointments_router, prefix="/api/v1")
 app.include_router(hospital_router, prefix="/api/v1")
+app.include_router(profiles_router, prefix="/api/v1")
+app.include_router(profiler_router, prefix="/api/v1")
 
 
 @app.on_event("startup")
