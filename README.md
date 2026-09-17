@@ -4,7 +4,13 @@ A scalable, production-grade healthcare assistant built using **Google ADK multi
 
 ---
 
-## 🏛️ System Architecture
+## 🏛️ System Architecture & Workflow
+
+<p align="center">
+  <img src="multi-hospital-agent.png" alt="Hospital Multi-Agent AI System Architecture, Workflow, and Components" width="100%" />
+</p>
+
+### 🔄 Architecture Overview
 
 ```
                                   USER
@@ -78,7 +84,7 @@ The system is built on a modern, decoupled healthcare AI architecture with the f
 - **In-Memory LRU Cache Fallback**: Seamless local in-process fallback ensuring memory features work even without an active Redis instance.
 
 ### 7. Testing, Containerization & Utilities
-- **[pytest](https://docs.pytest.org/) (`>=8.0.0`)**: Automated test suite with 22 unit and integration tests covering concurrency locks, emergency triage, RAG retrieval, agent routing, and REST endpoints.
+- **[pytest](https://docs.pytest.org/) (`>=8.0.0`)**: Automated test suite with 42 unit and integration tests covering concurrency locks, emergency triage, RAG PDF ingestion, NeMo profiles, agent routing, and REST endpoints.
 - **Docker & Docker Compose**: Multi-container containerization with `Dockerfile.backend`, `Dockerfile.frontend`, and `docker-compose.yml`.
 - **python-dateutil (`>=2.9.0`)**: Robust datetime manipulation for doctor shifts, leave calculations, and slot generation.
 
@@ -134,7 +140,7 @@ The system employs a hierarchical supervisor multi-agent architecture:
   - Security audit logging recording patient data reads, bookings, and cancellations.
 - [x] **Phase 10 — Frontend & Test Automation**:
   - Streamlit UI with modern healthcare styling, active patient switcher, interactive AI chat with agent badges, appointments calendar, doctor directory, and patient medical profile viewer.
-  - 22 automated unit and integration tests covering concurrency locks, RAG search, emergency escalation, session memory, and API routes.
+  - 42 automated unit and integration tests covering concurrency locks, RAG search and PDF ingestion, emergency escalation, session memory, NeMo profiles, and API routes.
 
 ---
 
