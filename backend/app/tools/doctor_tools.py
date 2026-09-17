@@ -76,3 +76,38 @@ def get_available_slots(doctor_id: int, date_str: str) -> Dict[str, Any]:
         }
     finally:
         db.close()
+
+
+def get_available_doctors_by_date(
+    date_str: str,
+    specialty: Optional[str] = None,
+    department: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Get all hospital doctors who have open consultation slots on a specific date (YYYY-MM-DD),
+    along with their open time slots.
+    """
+    db = SessionLocal()
+    try:
+        try:
+            target_date = datetime.date.fromisoformat(date_str)
+        except ValueError:
+            return {"status": "error", "message": f"Invalid date format '{date_str}'. Please use YYYY-MM-DD."}
+
+        docs = DoctorService.get_available_doctors_on_date(
+            db,
+            target_date=target_date,
+            specialty=specialty,
+            department_name=department
+        )
+        return {
+            "status": "success",
+            "date": date_str,
+            "day_of_week": target_date.strftime("%A"),
+            "specialty_filter": specialty,
+            "count": len(docs),
+            "doctors": docs
+        }
+    finally:
+        db.close()
+

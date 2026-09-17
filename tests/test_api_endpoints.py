@@ -20,6 +20,19 @@ def test_doctors_endpoint():
     assert any("Sarah Mitchell" in d["name"] for d in doctors)
 
 
+def test_available_doctors_endpoint():
+    # 2026-04-10 is a Friday
+    response = client.get("/api/v1/doctors/available?date=2026-04-10")
+    assert response.status_code == 200
+    docs = response.json()
+    assert len(docs) > 0
+    for d in docs:
+        assert "available_slots" in d
+        assert len(d["available_slots"]) > 0
+        assert d["date"] == "2026-04-10"
+
+
+
 def test_patients_endpoint():
     response = client.get("/api/v1/patients")
     assert response.status_code == 200

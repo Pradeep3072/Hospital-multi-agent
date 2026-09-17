@@ -3,7 +3,12 @@ import re
 import datetime
 from typing import Dict, Any, Optional
 from google.adk import Agent
-from backend.app.tools.doctor_tools import search_doctors, get_doctor_details, get_available_slots
+from backend.app.tools.doctor_tools import (
+    search_doctors,
+    get_doctor_details,
+    get_available_slots,
+    get_available_doctors_by_date
+)
 from backend.app.config import settings, get_gemini_client
 
 
@@ -40,6 +45,18 @@ def get_available_slots_tool(doctor_id: int, date_str: str) -> Dict[str, Any]:
     return get_available_slots(doctor_id=doctor_id, date_str=date_str)
 
 
+def get_available_doctors_on_date_tool(date_str: str, specialty: str = "") -> Dict[str, Any]:
+    """
+    Retrieves all active hospital doctors who have available consultation slots on a specific date,
+    along with their open booking slots.
+
+    Args:
+        date_str: Target date in YYYY-MM-DD format (e.g. 2026-04-10).
+        specialty: Optional medical specialty filter (e.g. 'Cardiology', 'Orthopedics').
+    """
+    return get_available_doctors_by_date(date_str=date_str, specialty=specialty if specialty else None)
+
+
 # Google ADK Doctor Agent
 doctor_agent = Agent(
     name="doctor_agent",
@@ -48,15 +65,18 @@ doctor_agent = Agent(
     instruction=(
         "You are the Doctor Directory & Specialist Finder Agent for HopeCare General Hospital. "
         "Help patients find physicians by medical specialty (Cardiology, Orthopedics, Neurology, Pediatrics, etc.), "
-        "look up doctor bios, fees, and retrieve available appointment slots using search_doctors_tool, "
-        "get_doctor_details_tool, and get_available_slots_tool."
+        "look up doctor bios, fees, and retrieve available appointment slots. "
+        "When a user asks which doctors are available on a particular date, call get_available_doctors_on_date_tool "
+        "to list all available doctors along with their open booking slots."
     ),
     tools=[
         search_doctors_tool,
         get_doctor_details_tool,
-        get_available_slots_tool
+        get_available_slots_tool,
+        get_available_doctors_on_date_tool
     ]
 )
+
 
 
 class DoctorAgent:
@@ -69,10 +89,33 @@ class DoctorAgent:
         tools_called = []
         tool_results = {}
 
-        # 1. Check if user is asking for available slots
+        # 1. Parse date if mentioned
+        target_date_str = None
         date_match = re.search(r"\b(202\d-\d{2}-\d{2})\b", message)
+        if date_match:
+            target_date_str = date_match.group(1)
+        elif "day after tomorrow" in msg_lower:
+            target_date_str = str(datetime.date.today() + datetime.timedelta(days=2))
+        elif "tomorrow" in msg_lower:
+            target_date_str = str(datetime.date.today() + datetime.timedelta(days=1))
+        elif "today" in msg_lower:
+            target_date_str = str(datetime.date.today())
+        else:
+            days_map = {
+                "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+                "friday": 4, "saturday": 5, "sunday": 6
+            }
+            for day_name, day_idx in days_map.items():
+                if day_name in msg_lower:
+                    today = datetime.date.today()
+                    days_ahead = (day_idx - today.weekday()) % 7
+                    if days_ahead == 0:
+                        days_ahead = 7
+                    target_date_str = str(today + datetime.timedelta(days=days_ahead))
+                    break
+
+        # 2. Check for specific doctor mention
         doc_id_match = re.search(r"\bdoctor\s*(\d+)\b|\bdr\.?\s*(\d+)\b", msg_lower)
-        
         doctor_id = None
         if doc_id_match:
             doctor_id = int(doc_id_match.group(1) or doc_id_match.group(2))
@@ -82,41 +125,51 @@ class DoctorAgent:
                     doctor_id = d_id
                     break
 
+        # 3. Check for specialty mention
         specialty = None
         for spec in ["cardiologist", "cardiology", "cardio", "neurologist", "neurology", "neuro", "pediatrician", "pediatrics", "pedia", "orthopedic", "orthopedics", "ortho", "internal medicine", "general medicine", "general"]:
             if spec in msg_lower:
                 specialty = spec
                 break
 
-        if ("slot" in msg_lower or "availability" in msg_lower or "available" in msg_lower or "free" in msg_lower) and (date_match or "tomorrow" in msg_lower or "today" in msg_lower):
-            target_date_str = None
-            if date_match:
-                target_date_str = date_match.group(1)
-            elif "tomorrow" in msg_lower:
-                tomorrow = datetime.date.today() + datetime.timedelta(days=1)
-                target_date_str = str(tomorrow)
-            else:
-                target_date_str = str(datetime.date.today())
-
-            target_doc_id = doctor_id or 1
+        # Case A: Specific doctor requested with date
+        if doctor_id and target_date_str:
             tools_called.append("get_available_slots")
-            tool_results["slots"] = get_available_slots(target_doc_id, target_date_str)
+            slots_res = get_available_slots(doctor_id, target_date_str)
+            tool_results["slots"] = slots_res
             tools_called.append("get_doctor_details")
-            doc_d = get_doctor_details(target_doc_id)
+            doc_d = get_doctor_details(doctor_id)
             tool_results["doctor"] = doc_d
+            tool_results["target_date"] = target_date_str
             if doc_d.get("doctor"):
-                tool_results["auto_select_doctor"] = doc_d["doctor"]
-                tool_results["doctors"] = [doc_d["doctor"]]
+                doc_obj = dict(doc_d["doctor"])
+                doc_obj["available_slots"] = slots_res.get("slots", [])
+                doc_obj["date"] = target_date_str
+                tool_results["auto_select_doctor"] = doc_obj
+                tool_results["doctors"] = [doc_obj]
 
+        # Case B: Date specified without a specific doctor -> Show all available doctors with booking slots
+        elif target_date_str:
+            tools_called.append("get_available_doctors_by_date")
+            avail_res = get_available_doctors_by_date(date_str=target_date_str, specialty=specialty)
+            tool_results["available_doctors_data"] = avail_res
+            avail_docs = avail_res.get("doctors", [])
+            tool_results["available_doctors"] = avail_docs
+            tool_results["doctors"] = avail_docs
+            tool_results["target_date"] = target_date_str
+            tool_results["day_of_week"] = avail_res.get("day_of_week")
+            if len(avail_docs) == 1:
+                tool_results["auto_select_doctor"] = avail_docs[0]
+
+        # Case C: General Doctor search by specialty or query
         else:
-            # Doctor search by specialty or query
             tools_called.append("search_doctors")
             tool_results["doctors"] = search_doctors(
                 query=None if specialty else message,
                 specialty=specialty
             )
             docs = tool_results["doctors"].get("doctors", [])
-            if docs:
+            if len(docs) == 1:
                 tool_results["auto_select_doctor"] = docs[0]
 
         client = get_gemini_client()
@@ -124,10 +177,10 @@ class DoctorAgent:
             try:
                 prompt = (
                     f"You are the Doctor Specialist Agent for HopeCare General Hospital.\n"
-                    f"Relevant Physician Data:\n{json.dumps(tool_results, indent=2)}\n\n"
+                    f"Relevant Physician & Availability Data:\n{json.dumps(tool_results, indent=2)}\n\n"
                     f"User Query: {message}\n"
                     f"Provide an informative, welcoming recommendation detailing the doctor's name, specialization, "
-                    f"consultation fee, room, and how the patient can book an appointment."
+                    f"consultation fee, and their available appointment slots for the requested date. Explain how the patient can book an appointment."
                 )
                 response = client.models.generate_content(
                     model=settings.GEMINI_MODEL,
@@ -144,7 +197,30 @@ class DoctorAgent:
 
         # Deterministic formatting fallback
         output = []
-        if "slots" in tool_results:
+        if "available_doctors" in tool_results:
+            avail_docs = tool_results["available_doctors"]
+            t_date = tool_results.get("target_date", "")
+            dow = tool_results.get("day_of_week", "")
+            date_display = f"{t_date} ({dow})" if dow else t_date
+            spec_title = f" ({specialty.capitalize()})" if specialty else ""
+            if avail_docs:
+                output.append(f"### 🗓️ Available Doctors on {date_display}{spec_title}\n")
+                output.append("The following physicians have open consultation slots available:\n")
+                for d in avail_docs:
+                    slots = d.get("available_slots", [])
+                    slot_txt = ", ".join([f"`{s}`" for s in slots[:8]])
+                    if len(slots) > 8:
+                        slot_txt += f" *(+{len(slots)-8} more)*"
+                    fee = f"${d.get('consultation_fee', 100):.0f}"
+                    output.append(
+                        f"- **Dr. {d['name']}** — *{d.get('specialization', 'General')}* (Fee: {fee})\n"
+                        f"  - **Available Booking Slots**: {slot_txt}\n"
+                    )
+                output.append("\n👉 Reply with *Book appointment with Dr. [Name] at [Time]* or click **Select & Book** below to reserve your slot.")
+            else:
+                output.append(f"No available doctors or open slots found on **{date_display}**{spec_title}. Please select another date or specialty.")
+
+        elif "slots" in tool_results:
             slots_data = tool_results["slots"]
             doc_name = tool_results.get("doctor", {}).get("doctor", {}).get("name", f"Doctor #{slots_data.get('doctor_id')}")
             slots = slots_data.get("slots", [])
@@ -161,7 +237,7 @@ class DoctorAgent:
                 output.append(f"No available slots found for Dr. {doc_name} on {slots_data.get('date')}. Please select another date.")
 
         elif "doctors" in tool_results:
-            doc_list = tool_results["doctors"].get("doctors", [])
+            doc_list = tool_results["doctors"].get("doctors", []) if isinstance(tool_results["doctors"], dict) else tool_results["doctors"]
             if doc_list:
                 output.append("### Recommended Specialists\n")
                 for d in doc_list:
@@ -182,3 +258,4 @@ class DoctorAgent:
             "tool_results": tool_results,
             "response": "\n".join(output)
         }
+

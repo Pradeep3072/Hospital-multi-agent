@@ -19,7 +19,28 @@ def list_doctors(
     return DoctorService.search_doctors(db, query=query, specialty=specialty, department_name=department)
 
 
+@router.get("/available")
+def get_available_doctors(
+    date: str = Query(..., description="Target date in YYYY-MM-DD format"),
+    specialty: Optional[str] = None,
+    department: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    try:
+        target_date = datetime.date.fromisoformat(date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+
+    return DoctorService.get_available_doctors_on_date(
+        db,
+        target_date=target_date,
+        specialty=specialty,
+        department_name=department
+    )
+
+
 @router.get("/{doctor_id}")
+
 def get_doctor_details(doctor_id: int, db: Session = Depends(get_db)):
     doc = DoctorService.get_doctor_details(db, doctor_id)
     if not doc:

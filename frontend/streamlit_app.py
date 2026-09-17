@@ -162,12 +162,12 @@ def extract_booking_intent(user_msg: str, agent_data: dict) -> dict | None:
         return None
 
     # Check booking intent
-    booking_keywords = ["book", "bok", "schedule", "reserve", "appointment", "consultation", "slot", "slots"]
+    booking_keywords = ["book", "bok", "schedule", "reserve", "appointment", "consultation", "slot", "slots", "available", "availability", "free"]
     has_keyword = any(w in msg_l for w in booking_keywords)
     is_appt_agent = agent_data.get("delegated_agent") == "Appointment Agent" or agent_data.get("route") == "appointment"
     tr = agent_data.get("tool_results", {})
 
-    if not (has_keyword or is_appt_agent or tr.get("show_booking_widget") or tr.get("booking_intent") or tr.get("auto_select_doctor")):
+    if not (has_keyword or is_appt_agent or tr.get("show_booking_widget") or tr.get("booking_intent") or tr.get("auto_select_doctor") or tr.get("available_doctors")):
         return None
 
     # 1. Doctor detection
@@ -208,6 +208,8 @@ def extract_booking_intent(user_msg: str, agent_data: dict) -> dict | None:
     specialty = None
     if tr.get("booking_intent", {}).get("specialty"):
         specialty = tr["booking_intent"]["specialty"]
+    elif tr.get("specialty_filter"):
+        specialty = tr["specialty_filter"]
     if not specialty:
         spec_map = {
             "cardio": "Cardiology",
@@ -231,14 +233,30 @@ def extract_booking_intent(user_msg: str, agent_data: dict) -> dict | None:
                 break
 
     # 3. Target Date detection
-    target_date = None
-    date_match = re.search(r"\b(202\d-\d{2}-\d{2})\b", user_msg)
-    if date_match:
-        target_date = date_match.group(1)
-    elif "tomorrow" in msg_l:
-        target_date = str(datetime.date.today() + datetime.timedelta(days=1))
-    elif "today" in msg_l:
-        target_date = str(datetime.date.today())
+    target_date = tr.get("target_date") or tr.get("date") or tr.get("booking_intent", {}).get("target_date")
+    if not target_date:
+        date_match = re.search(r"\b(202\d-\d{2}-\d{2})\b", user_msg)
+        if date_match:
+            target_date = date_match.group(1)
+        elif "day after tomorrow" in msg_l:
+            target_date = str(datetime.date.today() + datetime.timedelta(days=2))
+        elif "tomorrow" in msg_l:
+            target_date = str(datetime.date.today() + datetime.timedelta(days=1))
+        elif "today" in msg_l:
+            target_date = str(datetime.date.today())
+        else:
+            days_map = {
+                "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+                "friday": 4, "saturday": 5, "sunday": 6
+            }
+            for day_name, day_idx in days_map.items():
+                if day_name in msg_l:
+                    today = datetime.date.today()
+                    days_ahead = (day_idx - today.weekday()) % 7
+                    if days_ahead == 0:
+                        days_ahead = 7
+                    target_date = str(today + datetime.timedelta(days=days_ahead))
+                    break
 
     return {
         "active": True,
@@ -247,6 +265,7 @@ def extract_booking_intent(user_msg: str, agent_data: dict) -> dict | None:
         "filter_specialty": specialty,
         "target_date": target_date
     }
+
 
 
 # Session State Initialization (ChatGPT-style session management)
@@ -444,36 +463,54 @@ if navigation == "💬 AI Assistant":
             # Interactive doctor selection cards if doctors were retrieved in this turn
             doctors_list = []
             has_auto_select = False
+            msg_target_date = None
             if msg.get("tool_results"):
                 tr = msg["tool_results"]
+                msg_target_date = tr.get("target_date") or tr.get("date") or tr.get("booking_intent", {}).get("target_date")
                 if "auto_select_doctor" in tr and tr["auto_select_doctor"]:
                     has_auto_select = True
-                if "doctors" in tr and isinstance(tr["doctors"], list) and tr["doctors"]:
+                if "available_doctors" in tr and isinstance(tr["available_doctors"], list) and tr["available_doctors"]:
+                    doctors_list = tr["available_doctors"]
+                elif "doctors" in tr and isinstance(tr["doctors"], list) and tr["doctors"]:
                     doctors_list = tr["doctors"]
+                elif "doctors" in tr and isinstance(tr["doctors"], dict) and "doctors" in tr["doctors"] and tr["doctors"]["doctors"]:
+                    doctors_list = tr["doctors"]["doctors"]
                 elif "search" in tr and isinstance(tr["search"], dict) and "doctors" in tr["search"] and tr["search"]["doctors"]:
                     doctors_list = tr["search"]["doctors"]
 
             # Only show doctor cards list when not auto-selected to a specific doctor
             if doctors_list and not has_auto_select and msg["role"] == "assistant":
                 st.markdown("---")
-                st.markdown("##### 🩺 Available Physicians & Specialties — Select to View Calendar Slots:")
+                header_title = f"##### 🩺 Available Physicians & Booking Slots ({msg_target_date}):" if msg_target_date else "##### 🩺 Available Physicians & Specialties — Select to View Calendar Slots:"
+                st.markdown(header_title)
                 for d in doctors_list:
                     with st.container(border=True):
                         d_col1, d_col2 = st.columns([3, 1])
                         with d_col1:
+                            doc_spec = d.get('specialization', d.get('department', 'General'))
                             st.markdown(
-                                f"**{d['name']}** — *{d.get('specialization', d.get('department', 'General'))}*  \n"
+                                f"**{d['name']}** — *{doc_spec}*  \n"
                                 f"Experience: {d.get('experience_years', 5)} yrs | Consultation Fee: `${d.get('consultation_fee', 100):.0f}`"
                             )
+                            # Show available booking slots if present for this date
+                            d_slots = d.get("available_slots", [])
+                            d_date = d.get("date") or msg_target_date
+                            if d_slots:
+                                slot_badges = " &nbsp; ".join([f"`{s}`" for s in d_slots[:8]])
+                                extra = f" *(+{len(d_slots)-8} more)*" if len(d_slots) > 8 else ""
+                                st.markdown(f"🕒 **Available Booking Slots ({d_date})**: {slot_badges}{extra}")
                         with d_col2:
-                            if st.button("📅 Select & Book", key=f"book_btn_{msg_idx}_{d['id']}"):
+                            btn_label = "📅 Book Slot" if d.get("available_slots") else "📅 Select & Book"
+                            if st.button(btn_label, key=f"book_btn_{msg_idx}_{d['id']}"):
                                 st.session_state.booking_flow = {
-                                    "doctor_id": d["id"],
-                                    "doctor_name": d["name"],
-                                    "specialty": d.get("specialization", d.get("department", "General")),
-                                    "fee": d.get("consultation_fee", 100)
+                                    "filter_doctor_id": d["id"],
+                                    "filter_doctor_name": d["name"],
+                                    "filter_specialty": d.get("specialization", d.get("department", "General")),
+                                    "fee": d.get("consultation_fee", 100),
+                                    "target_date": d_date
                                 }
                                 st.rerun()
+
             
             if msg.get("tools_called"):
                 tools = [t for t in msg["tools_called"] if t]

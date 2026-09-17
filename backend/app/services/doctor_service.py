@@ -170,6 +170,46 @@ class DoctorService:
         return available_slots
 
     @staticmethod
+    def get_available_doctors_on_date(
+        db: Session,
+        target_date: datetime.date,
+        specialty: Optional[str] = None,
+        department_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve all active hospital doctors who have available consultation slots on a specific date,
+        optionally filtered by medical specialty or department.
+        Returns each doctor's details along with their list of open booking slots.
+        """
+        all_docs = DoctorService.search_doctors(
+            db,
+            specialty=specialty,
+            department_name=department_name
+        )
+
+        # Deduplicate doctors by name + specialization to ensure clean output
+        seen = set()
+        unique_docs = []
+        for d in all_docs:
+            k = (d["name"].strip().lower(), d.get("specialization", "").strip().lower())
+            if k not in seen:
+                seen.add(k)
+                unique_docs.append(d)
+
+        available_doctors = []
+        for doc in unique_docs:
+            slots = DoctorService.get_available_slots(db, doc["id"], target_date)
+            if slots:
+                doc_info = dict(doc)
+                doc_info["date"] = str(target_date)
+                doc_info["day_of_week"] = target_date.strftime("%A")
+                doc_info["available_slots_count"] = len(slots)
+                doc_info["available_slots"] = slots
+                available_doctors.append(doc_info)
+
+        return available_doctors
+
+    @staticmethod
     def create_doctor(
         db: Session,
         name: str,

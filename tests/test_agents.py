@@ -72,3 +72,29 @@ def test_appointment_agent_does_not_autobook_on_generic_request():
     resp_lower = res["response"].lower()
     assert "doctor" in resp_lower or "special" in resp_lower or "which" in resp_lower
 
+
+def test_doctor_agent_available_doctors_on_date():
+    """Verify that asking for available doctors on a particular date returns doctors with their open slots."""
+    res = root_supervisor.execute_workflow("show available doctors on 2026-04-10", {"patient_id": 1, "session_id": "test_avail_date"})
+    assert res["delegated_agent"] in ["Doctor Agent", "Appointment Agent"]
+    tr = res["tool_results"]
+    assert "available_doctors" in tr or "doctors" in tr
+    docs = tr.get("available_doctors") or tr.get("doctors", [])
+    assert len(docs) > 0
+    # Response contains doctor name and time slots
+    assert "09:00" in res["response"] or "slot" in res["response"].lower()
+    assert any("Sarah" in d["name"] or "Mitchell" in d["name"] for d in docs)
+
+
+def test_doctor_agent_available_specialty_on_date():
+    """Verify that asking for available cardiologists on a date filters doctors with open slots."""
+    res = root_supervisor.execute_workflow("which cardiologists are available on 2026-04-10", {"patient_id": 1, "session_id": "test_cardio_date"})
+    tr = res["tool_results"]
+    docs = tr.get("available_doctors") or tr.get("doctors", [])
+    assert len(docs) > 0
+    for d in docs:
+        assert "cardio" in d.get("specialization", "").lower() or "cardio" in d.get("department", "").lower()
+        if "available_slots" in d:
+            assert len(d["available_slots"]) > 0
+
+

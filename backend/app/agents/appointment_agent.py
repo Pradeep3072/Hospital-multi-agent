@@ -6,11 +6,23 @@ from google.adk import Agent
 from backend.app.tools.appointment_tools import (
     book_appointment, cancel_appointment, reschedule_appointment, check_availability
 )
-from backend.app.tools.doctor_tools import search_doctors, get_doctor_details
+from backend.app.tools.doctor_tools import search_doctors, get_doctor_details, get_available_doctors_by_date
 from backend.app.config import settings
 
 
 # Google ADK Tools for Appointment Agent
+def get_available_doctors_on_date_tool(date_str: str, specialty: str = "") -> Dict[str, Any]:
+    """
+    Retrieves all available doctors who have open consultation slots on a specific date (YYYY-MM-DD),
+    along with their open booking slots.
+    
+    Args:
+        date_str: Date in YYYY-MM-DD format (e.g. 2026-04-10).
+        specialty: Optional medical specialty (e.g. 'Cardiology', 'Orthopedics').
+    """
+    return get_available_doctors_by_date(date_str=date_str, specialty=specialty if specialty else None)
+
+
 def search_doctors_tool(query: str = "", specialty: str = "") -> Dict[str, Any]:
     """
     Search doctors by physician name, bio keywords, or medical specialization.
@@ -135,6 +147,7 @@ appointment_agent = Agent(
     ),
     tools=[
         search_doctors_tool,
+        get_available_doctors_on_date_tool,
         check_availability_tool,
         book_appointment_tool,
         cancel_appointment_tool,
@@ -224,9 +237,26 @@ class AppointmentAgent:
             target_date = None
             if date_match:
                 target_date = date_match.group(1)
+            elif "day after tomorrow" in msg_lower:
+                target_date = str(datetime.date.today() + datetime.timedelta(days=2))
             elif "tomorrow" in msg_lower:
                 target_date = str(datetime.date.today() + datetime.timedelta(days=1))
-            
+            elif "today" in msg_lower:
+                target_date = str(datetime.date.today())
+            else:
+                days_map = {
+                    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+                    "friday": 4, "saturday": 5, "sunday": 6
+                }
+                for day_name, day_idx in days_map.items():
+                    if day_name in msg_lower:
+                        today = datetime.date.today()
+                        days_ahead = (day_idx - today.weekday()) % 7
+                        if days_ahead == 0:
+                            days_ahead = 7
+                        target_date = str(today + datetime.timedelta(days=days_ahead))
+                        break
+
             target_time = None
             if time_match:
                 target_time = time_match.group(1)
@@ -302,7 +332,52 @@ class AppointmentAgent:
                     "response": msg
                 }
 
-            # If specialty is mentioned, search doctors
+            # If target_date is mentioned without a specific doctor: Show all available doctors with booking slots
+            if target_date and not doc_id:
+                tools_called.append("get_available_doctors_by_date")
+                avail_res = get_available_doctors_by_date(date_str=target_date, specialty=specialty)
+                avail_docs = avail_res.get("doctors", [])
+                tool_results["available_doctors"] = avail_docs
+                tool_results["doctors"] = avail_docs
+                tool_results["booking_intent"] = {
+                    "show_booking_widget": True,
+                    "target_date": target_date,
+                    "specialty": specialty
+                }
+                
+                day_name = avail_res.get("day_of_week", "")
+                date_label = f"{target_date} ({day_name})" if day_name else target_date
+                spec_label = f" {specialty.capitalize()}" if specialty else ""
+
+                if avail_docs:
+                    doc_lines = []
+                    for d in avail_docs:
+                        slots = d.get("available_slots", [])
+                        slot_txt = ", ".join([f"`{s}`" for s in slots[:8]])
+                        if len(slots) > 8:
+                            slot_txt += f" *(+{len(slots)-8} more)*"
+                        doc_lines.append(
+                            f"- **Dr. {d['name']}** — *{d.get('specialization', 'General')}* (Fee: ${d.get('consultation_fee', 100):.0f})\n"
+                            f"  🕒 **Available Slots**: {slot_txt}"
+                        )
+                    docs_text = "\n".join(doc_lines)
+                    msg = (
+                        f"### 🗓️ Available Doctors on {date_label}{spec_label}\n\n"
+                        f"{docs_text}\n\n"
+                        f"👉 Which doctor or time slot would you like to book? "
+                        f"You can choose in the booking drawer below or reply with *Book Dr. [Name] on {target_date} at [Time]*."
+                    )
+                else:
+                    msg = f"No available doctors or open slots were found on **{date_label}**{spec_label}. Please select another date or specialty."
+
+                return {
+                    "agent": self.name,
+                    "tools_called": tools_called,
+                    "tool_results": tool_results,
+                    "response": msg
+                }
+
+            # If specialty is mentioned without a date, search doctors
             if specialty:
                 tools_called.append("search_doctors")
                 tool_results["doctors"] = search_doctors(specialty=specialty)
@@ -323,17 +398,6 @@ class AppointmentAgent:
                     "response": msg
                 }
 
-            # If target_date is mentioned (e.g. 'tomorrow') but no doctor or specialty
-            if target_date:
-                return {
-                    "agent": self.name,
-                    "tools_called": tools_called,
-                    "tool_results": tool_results,
-                    "response": (
-                        f"I'd be happy to help you book an appointment for **{target_date}**!\n\n"
-                        "Which doctor or medical specialty (such as Cardiology, Neurology, Pediatrics, Orthopedics, or General Medicine) would you like to see?"
-                    )
-                }
 
             return {
                 "agent": self.name,
